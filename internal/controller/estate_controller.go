@@ -36,9 +36,11 @@ import (
 	"github.com/tequila/tq-operator/internal/report"
 )
 
-// Condition types and reasons of Estate.status.conditions.
+// Condition types and reasons of Estate.status.conditions. None is Ready: Flux's health check
+// would hold the Kustomization that applies the Estate while a Ready condition is False, and an
+// Estate never gates anything (see EstateStatus).
 const (
-	ConditionReady    = "Ready"
+	ConditionObserved = "Observed"
 	ConditionReported = "Reported"
 	ConditionDrifted  = "Drifted"
 
@@ -63,7 +65,7 @@ type Config struct {
 	// Operator is the reporting operator's identity in the report.
 	Operator report.Operator
 	// SelfVerification is the result of the operator's check of its own image; a failure
-	// is a Ready: False condition and continued operation — the operator never stops observing
+	// is an Observed: False condition and continued operation — the operator never stops observing
 	// because of its own supply chain.
 	SelfVerification func() (ok bool, message string)
 }
@@ -109,11 +111,11 @@ func (r *EstateReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	observed := Observed(&est.Spec, obs, scope, ownServices)
 
 	next := est.Status.DeepCopy()
-	next.ObservedGeneration = est.Generation
+	keepOwnConditions(next)
 	next.Cluster, next.Applied, next.Running = observed.Cluster, observed.Applied, observed.Running
 	next.ExternalSecrets, next.Drift, next.Preflight, next.Health = observed.ExternalSecrets, observed.Drift, nil, observed.Health
 
-	r.setReady(next, &est, obs, now)
+	r.setObserved(next, &est, obs, now)
 	reason, message := summarize(observed.Drift)
 	setCondition(next, ConditionDrifted, len(observed.Drift) > 0, reason, message, est.Generation, now)
 
@@ -147,7 +149,7 @@ func (r *EstateReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	return ctrl.Result{RequeueAfter: max(nextDue.Sub(r.now()), Debounce)}, nil
 }
 
-func (r *EstateReconciler) setReady(st *estatev1alpha1.EstateStatus, est *estatev1alpha1.Estate, obs *observe.Observation, now time.Time) {
+func (r *EstateReconciler) setObserved(st *estatev1alpha1.EstateStatus, est *estatev1alpha1.Estate, obs *observe.Observation, now time.Time) {
 	var problems []string
 	declared := []string{est.Spec.Namespaces.Platform, est.Spec.Namespaces.Services}
 	watched := []string{r.Config.Namespaces.Platform, r.Config.Namespaces.Services}
@@ -159,12 +161,12 @@ func (r *EstateReconciler) setReady(st *estatev1alpha1.EstateStatus, est *estate
 	problems = append(problems, incomplete...)
 	problems = append(problems, obs.Gaps...)
 	if len(problems) > 0 {
-		setCondition(st, ConditionReady, false, ReasonCacheNotSynced, "not observed: "+strings.Join(problems, "; "), est.Generation, now)
+		setCondition(st, ConditionObserved, false, ReasonCacheNotSynced, "not observed: "+strings.Join(problems, "; "), est.Generation, now)
 		return
 	}
 	if r.Config.SelfVerification != nil {
 		if ok, msg := r.Config.SelfVerification(); !ok {
-			setCondition(st, ConditionReady, false, ReasonSelfVerificationFailed, msg, est.Generation, now)
+			setCondition(st, ConditionObserved, false, ReasonSelfVerificationFailed, msg, est.Generation, now)
 			return
 		}
 	}
@@ -175,7 +177,7 @@ func (r *EstateReconciler) setReady(st *estatev1alpha1.EstateStatus, est *estate
 	if len(absent) > 0 {
 		msg += "; not served in this cluster: " + strings.Join(absent, ", ")
 	}
-	setCondition(st, ConditionReady, true, ReasonReconciled, msg, est.Generation, now)
+	setCondition(st, ConditionObserved, true, ReasonReconciled, msg, est.Generation, now)
 }
 
 // writeStatus writes the status subresource; a conflict is a retry on the fresh object.
@@ -186,7 +188,6 @@ func (r *EstateReconciler) writeStatus(ctx context.Context, key types.Namespaced
 			return client.IgnoreNotFound(err)
 		}
 		fresh.Status = st
-		fresh.Status.ObservedGeneration = fresh.Generation
 		return r.Status().Update(ctx, &fresh)
 	})
 }
@@ -254,6 +255,20 @@ func conditionMessage(res report.Result, next time.Time) string {
 		msg += "; next attempt at " + next.UTC().Format(time.RFC3339)
 	}
 	return msg
+}
+
+// keepOwnConditions drops every condition that is not Observed, Reported or Drifted — a Ready
+// condition an earlier build left would otherwise be written back with every status update and
+// keep holding the Kustomization that applies the Estate.
+func keepOwnConditions(st *estatev1alpha1.EstateStatus) {
+	own := st.Conditions[:0]
+	for _, c := range st.Conditions {
+		switch c.Type {
+		case ConditionObserved, ConditionReported, ConditionDrifted:
+			own = append(own, c)
+		}
+	}
+	st.Conditions = own
 }
 
 func setCondition(st *estatev1alpha1.EstateStatus, conditionType string, ok bool, reason, message string, generation int64, now time.Time) {

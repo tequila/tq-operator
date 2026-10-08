@@ -20,8 +20,8 @@ spec:
     - jsonPath: .spec.environment
       name: Environment
       type: string
-    - jsonPath: .status.conditions[?(@.type=="Ready")].status
-      name: Ready
+    - jsonPath: .status.conditions[?(@.type=="Observed")].status
+      name: Observed
       type: string
     - jsonPath: .status.conditions[?(@.type=="Reported")].status
       name: Reported
@@ -221,6 +221,12 @@ spec:
             description: |-
               EstateStatus is the operator's observation: applied and running state compared with spec.
               It is written by the operator alone, through the status subresource.
+
+              An Estate is a report, never a workload, and it must never gate the Flux Kustomization that
+              applies it (wait: true): Flux's health check holds a custom resource while a top-level
+              status.observedGeneration differs from metadata.generation or while a condition of type Ready
+              is False. So the status has neither: each condition records the generation it was set for in
+              its own observedGeneration, and the operator's own state is the condition Observed.
             properties:
               applied:
                 description: AppliedStatus is what Flux applied.
@@ -320,7 +326,8 @@ spec:
                 - platform
                 type: object
               conditions:
-                description: Conditions are Ready, Reported and Drifted.
+                description: Conditions are Observed, Reported and Drifted — never
+                  Ready.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -500,9 +507,6 @@ spec:
                 - at
                 - outcome
                 type: object
-              observedGeneration:
-                format: int64
-                type: integer
               preflight:
                 description: Preflight is rung verify's; always empty at rung observe.
                 items:

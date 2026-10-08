@@ -317,11 +317,34 @@ func condition(est *estatev1alpha1.Estate, typ string) *metav1.Condition {
 	return meta.FindStatusCondition(est.Status.Conditions, typ)
 }
 
+// neverGatesFlux holds the Estate's status as the API server stores it to what Flux's health
+// check must never wait on: no top-level observedGeneration and no condition of type Ready.
+func neverGatesFlux(t *testing.T, c client.Client) {
+	t.Helper()
+	u := &unstructured.Unstructured{}
+	u.SetGroupVersionKind(estatev1alpha1.GroupVersion.WithKind("Estate"))
+	must(t, c.Get(context.Background(), types.NamespacedName{Namespace: "tq-operator", Name: "prod"}, u))
+	if _, found, _ := unstructured.NestedFieldNoCopy(u.Object, "status", "observedGeneration"); found {
+		t.Error("status.observedGeneration is stored: Flux would wait for the operator")
+	}
+	conditions, _, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
+	for _, cond := range conditions {
+		if m, ok := cond.(map[string]any); ok && m["type"] == "Ready" {
+			t.Errorf("a condition of type Ready is stored: %v", m)
+		}
+	}
+}
+
 func TestEstateReconcilerObservesComparesAndReports(t *testing.T) {
 	env, c, scheme := startEnv(t)
 	ctx := context.Background()
 	seed(t, ctx, c)
-	must(t, c.Create(ctx, estate()))
+	first := estate()
+	must(t, c.Create(ctx, first))
+	// A Ready: False an earlier build left: the reconciler's first status write drops it.
+	first.Status.Conditions = []metav1.Condition{{Type: "Ready", Status: metav1.ConditionFalse, Reason: "EarlierBuild",
+		Message: "left by an earlier build", LastTransitionTime: metav1.Now()}}
+	must(t, c.Status().Update(ctx, first))
 	fake := newFakeTequila(t)
 	startManager(t, env, scheme, fake)
 
@@ -330,9 +353,10 @@ func TestEstateReconcilerObservesComparesAndReports(t *testing.T) {
 		return r != nil && r.Status == metav1.ConditionTrue
 	})
 
-	// Conditions.
-	if r := condition(est, controller.ConditionReady); r == nil || r.Status != metav1.ConditionTrue || r.Reason != controller.ReasonReconciled {
-		t.Errorf("Ready = %+v", r)
+	// Conditions: Observed (never Ready), each recording the generation it was set for.
+	neverGatesFlux(t, c)
+	if r := condition(est, controller.ConditionObserved); r == nil || r.Status != metav1.ConditionTrue || r.Reason != controller.ReasonReconciled || r.ObservedGeneration != est.Generation {
+		t.Errorf("Observed = %+v (generation %d)", r, est.Generation)
 	}
 	if r := condition(est, controller.ConditionReported); r.Reason != "Accepted" {
 		t.Errorf("Reported = %+v", r)
@@ -340,8 +364,8 @@ func TestEstateReconcilerObservesComparesAndReports(t *testing.T) {
 	if d := condition(est, controller.ConditionDrifted); d == nil || d.Status != metav1.ConditionTrue || d.Reason != "RunningBehind" {
 		t.Errorf("Drifted = %+v", d)
 	}
-	if est.Status.ObservedGeneration != est.Generation || est.Status.LastReport == nil || est.Status.LastReport.Outcome != "accepted" || est.Status.LastReport.Status != 202 {
-		t.Errorf("observedGeneration %d/%d lastReport %+v", est.Status.ObservedGeneration, est.Generation, est.Status.LastReport)
+	if est.Status.LastReport == nil || est.Status.LastReport.Outcome != "accepted" || est.Status.LastReport.Status != 202 {
+		t.Errorf("lastReport %+v", est.Status.LastReport)
 	}
 
 	// Cluster: versions and architectures, never a node's name.
@@ -458,9 +482,10 @@ func TestEstateReconcilerObservesComparesAndReports(t *testing.T) {
 	if est.Status.LastReport.Outcome != "unreachable" || est.Status.LastReport.Status != 503 {
 		t.Errorf("lastReport = %+v", est.Status.LastReport)
 	}
-	if r := condition(est, controller.ConditionReady); r.Status != metav1.ConditionTrue {
-		t.Errorf("an unreachable console is not a reconcile failure: Ready = %+v", r)
+	if r := condition(est, controller.ConditionObserved); r.Status != metav1.ConditionTrue || r.ObservedGeneration != est.Generation {
+		t.Errorf("an unreachable console is not a reconcile failure: Observed = %+v (generation %d)", r, est.Generation)
 	}
+	neverGatesFlux(t, c)
 	if len(est.Status.Running.Workloads) != 4 {
 		t.Error("status must still be written while the console is down")
 	}

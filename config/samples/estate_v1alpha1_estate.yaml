@@ -1,5 +1,7 @@
 # An Estate as an environment's render emits it: a pure function of tequila.yaml, no commit and
-# no timestamp. Flux applies it; the operator writes its status.
+# no timestamp. Flux applies it; the operator writes its status. The status never gates Flux: its
+# conditions are Observed, Reported and Drifted (never Ready), and it has no top-level
+# observedGeneration, so the Kustomization that applies it is healthy as soon as it is applied.
 apiVersion: estate.tequila.dev/v1alpha1
 kind: Estate
 metadata:

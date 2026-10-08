@@ -59,8 +59,11 @@ while :; do
 done
 echo "status.running lists tequila/fake; Reported is False/Unreachable"
 
-jq -e '.status.conditions[] | select(.type == "Ready" and .status == "True")' <<<"$estate" >/dev/null \
-    || fail "Ready is not True"
+jq -e '.status.conditions[] | select(.type == "Observed" and .status == "True")' <<<"$estate" >/dev/null \
+    || fail "Observed is not True"
+# The Estate never gates the Kustomization that applies it: nothing for Flux's health check to wait on.
+jq -e '(.status | has("observedGeneration") | not) and ([.status.conditions[] | select(.type == "Ready")] | length == 0)' <<<"$estate" >/dev/null \
+    || fail "the status carries observedGeneration or a Ready condition"
 jq -e '.status.lastReport.outcome == "unreachable"' <<<"$estate" >/dev/null || fail "lastReport.outcome is not unreachable"
 jq -e '.status.cluster.nodes.count >= 1 and .status.cluster.kubernetes != ""' <<<"$estate" >/dev/null || fail "cluster facts missing"
 jq -e '[.status.running.workloads[] | select(.name == "fake")][0].service == null' <<<"$estate" >/dev/null \

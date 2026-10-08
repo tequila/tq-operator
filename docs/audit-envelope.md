@@ -208,8 +208,16 @@ The operator is yours to switch off and to unbind, from your own repository and 
 kubectl -n tq-operator scale deploy tq-operator --replicas=0      # your workloads are untouched
 kubectl get estate -A -o jsonpath='{range .items[*]}{.metadata.name}{" finalizers="}{.metadata.finalizers}{"\n"}{end}'   # none
 kubectl get validatingwebhookconfigurations,mutatingwebhookconfigurations   # none of the operator's
+kubectl get estate -A -o json | jq '[.items[].status | has("observedGeneration") or any(.conditions[]?; .type == "Ready")] | any'   # false
 kubectl -n tq-operator scale deploy tq-operator --replicas=1
 ```
+
+**The Estate never holds your deploys:** Flux applies the `Estate` with the rest of the platform
+estate, and its health check would wait on a custom resource whose top-level
+`status.observedGeneration` lags `metadata.generation`, or whose `Ready` condition is `False`.
+The `Estate`'s status has neither. Its conditions are `Observed`, `Reported` and `Drifted`, each
+with its own `observedGeneration`. An operator that is down, switched off or unbound delays
+nothing that comes after it.
 
 **When the console or IAM is down:**
 

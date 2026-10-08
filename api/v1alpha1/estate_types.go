@@ -165,11 +165,14 @@ type ReportSpec struct {
 
 // EstateStatus is the operator's observation: applied and running state compared with spec.
 // It is written by the operator alone, through the status subresource.
+//
+// An Estate is a report, never a workload, and it must never gate the Flux Kustomization that
+// applies it (wait: true): Flux's health check holds a custom resource while a top-level
+// status.observedGeneration differs from metadata.generation or while a condition of type Ready
+// is False. So the status has neither: each condition records the generation it was set for in
+// its own observedGeneration, and the operator's own state is the condition Observed.
 type EstateStatus struct {
-	// +optional
-	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
-
-	// Conditions are Ready, Reported and Drifted.
+	// Conditions are Observed, Reported and Drifted — never Ready.
 	// +listType=map
 	// +listMapKey=type
 	// +optional
@@ -376,7 +379,7 @@ type LastReport struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Namespaced,categories=tequila
 // +kubebuilder:printcolumn:name="Environment",type=string,JSONPath=`.spec.environment`
-// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
+// +kubebuilder:printcolumn:name="Observed",type=string,JSONPath=`.status.conditions[?(@.type=="Observed")].status`
 // +kubebuilder:printcolumn:name="Reported",type=string,JSONPath=`.status.conditions[?(@.type=="Reported")].status`
 // +kubebuilder:printcolumn:name="Drifted",type=string,JSONPath=`.status.conditions[?(@.type=="Drifted")].status`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`

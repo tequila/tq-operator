@@ -52,8 +52,14 @@ See [config/samples/estate_v1alpha1_estate.yaml](config/samples/estate_v1alpha1_
 | `externalSecrets` | total, ready, and the not-ready ones with ESO's reason |
 | `drift` | `RunningBehind`, `AppliedBehind`, `NotReady`, `SecretNotResolvable`, `NoEstate` (`Undeclared` arrives in a later release) |
 | `health` | Pods by phase, and crash-looping workloads |
-| `conditions` | `Ready`, `Reported` and `Drifted` |
+| `conditions` | `Observed`, `Reported` and `Drifted`, each with the `observedGeneration` it was set for |
 | `lastReport` | when the last report was sent, its outcome and its HTTP status |
+
+An `Estate` is a report, not a workload, and it never gates anything. Flux's health check holds a
+custom resource while a top-level `status.observedGeneration` differs from `metadata.generation`
+or while a condition of type `Ready` is `False`, and the render applies the `Estate` with
+`wait: true`. So `status` has neither: an operator that crash-loops, is switched off or is
+`Unbound` holds no later wave of the estate.
 
 The report the console receives is `status` plus a few additions. It adds the declared echo of
 `spec` and the estate's identity. It also carries the operator's version, image and capabilities
@@ -86,7 +92,7 @@ registers. Deleting the binding stops the reports: `Reported` reads `False/Unbou
 | The console or IAM is unreachable, or answers 5xx/429 | backs off 1m, 2m, 4m … 1h, honouring `Retry-After`; status is still written | `False/Unreachable` |
 | IAM answers `invalid_grant`, or the console answers 401 | retries every 5m for the first hour after start (the binding is usually registered after bootstrap), then hourly | `False/Unbound` |
 | Any other refusal (403 `estate_mismatch`, 410, `invalid_target`, 422) | backs off 1m … 1h | `False/Refused`; `lastReport.outcome` is `refused` or `invalid` |
-| A kind is not served (no CRD) or not permitted | observes the rest and names the gap; restarts itself once a probe finds the kind readable | `Ready: False/CacheNotSynced` when the gap is a permission |
+| A kind is not served (no CRD) or not permitted | observes the rest and names the gap; restarts itself once a probe finds the kind readable | `Observed: False/CacheNotSynced` when the gap is a permission |
 | No `Estate` is declared | reports the cluster facts with `declared: null` and one `NoEstate` drift | — |
 | No reconcile completes in 3 × interval, or the caches do not sync within 5m | exits non-zero; the kubelet restarts it (there is no probe port) | — |
 
