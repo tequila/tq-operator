@@ -1,9 +1,4 @@
-# Only what the build stage copies.
+# Only the binaries `make dist` builds: the Dockerfile copies one of them.
 *
-!go.mod
-!go.sum
-!api/
-!cmd/
-!internal/
-**/*_test.go
-**/testdata/
+!dist/tq-operator-linux-amd64
+!dist/tq-operator-linux-arm64

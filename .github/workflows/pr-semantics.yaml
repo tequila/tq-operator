@@ -1,21 +1,149 @@
 name: 'PR Semantics'
 
-# The PR-level release contract: conventional title, conventional commits, title release
-# impact == max commit impact. `edited` is in the trigger on purpose — retitling re-runs the
-# gate.
+# The PR-level release contract, checked on every pull request:
+#
+#   1. The PR title is a Conventional Commit header — the release preview in the PR list, and
+#      the commit header when the PR is squashed.
+#   2. Every commit of the PR is a Conventional Commit (merge commits are exempt; fixup!/squash!
+#      commits are autosquashed before merging).
+#   3. The title's release impact EQUALS the maximum release impact of the commits. Without a
+#      squash, release-please versions the COMMITS, not the title, so the title may neither
+#      understate the release (a fix: title over a feat: commit) nor promise one the commits will
+#      not produce (a feat: title over docs-only commits). Equality makes squash and merge
+#      release-equivalent.
+#
+# Impact: major = "!" after the type/scope or a "BREAKING CHANGE:" footer · minor = feat ·
+# patch = fix, revert · none = docs, style, refactor, perf, test, build, ci, chore (a perf or a
+# refactor that must ship a release is a fix).
+#
+# `edited` is in the trigger on purpose: retitling re-runs the gate. The job reads the PR with
+# the default token, read-only, on a GitHub-hosted runner — a fork's PR runs it too.
 
 on:
     pull_request:
         branches: [ "main" ]
         types: [ opened, edited, reopened, synchronize ]
 
+permissions: {}
+
 jobs:
     semantics:
+        name: Conventional title ↔ commits
         if: ${{ vars.TEQUILA_RELEASE_AUTOMATION != 'false' }}
-        # Explicit grant: the called gate job requests contents+pull-requests read,
-        # and a nested job may not exceed what the caller allows.
+        runs-on: ubuntu-latest
+        timeout-minutes: 5
         permissions:
             contents: read
             pull-requests: read
-        uses: tequila/tequila-gha/.github/workflows/pr-semantics.yaml@main
-        secrets: inherit
+        steps:
+            - name: The title's release impact equals the commits' maximum
+              env:
+                  REPO: ${{ github.repository }}
+                  PR_NUMBER: ${{ github.event.pull_request.number }}
+                  # From the environment, never interpolated into the script.
+                  PR_TITLE: ${{ github.event.pull_request.title }}
+                  GH_TOKEN: ${{ github.token }}
+              run: |
+                  set -euo pipefail
+
+                  TYPES='feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert'
+                  HEADER_RE="^(${TYPES})(\([^)]+\))?(!)?: .+"
+                  LIMIT=100
+
+                  impact() { # $1 = headline, $2 = body → major|minor|patch|none; "" = not conventional
+                      local headline="$1" body="${2:-}" type
+                      [[ "$headline" =~ $HEADER_RE ]] || { echo ""; return; }
+                      type="${BASH_REMATCH[1]}"
+                      if [[ -n "${BASH_REMATCH[3]}" ]] || grep -qE '^BREAKING[ -]CHANGE:' <<<"$body"; then
+                          echo major; return
+                      fi
+                      case "$type" in
+                          feat)       echo minor ;;
+                          fix|revert) echo patch ;;
+                          *)          echo none ;;
+                      esac
+                  }
+
+                  rank() { case "$1" in major) echo 3 ;; minor) echo 2 ;; patch) echo 1 ;; *) echo 0 ;; esac; }
+
+                  # The PR's commits, oldest first: one page of $LIMIT, every call bounded and retried.
+                  commits_json=''
+                  for delay in 5 15 30 ''; do
+                      if commits_json="$(timeout 60 gh api "repos/${REPO}/pulls/${PR_NUMBER}/commits?per_page=${LIMIT}")"; then
+                          break
+                      fi
+                      [[ -n "$delay" ]] || { echo "::error title=PR semantics::could not read the commits of ${REPO}#${PR_NUMBER}"; exit 1; }
+                      echo "reading the commits failed — retrying in ${delay} s"
+                      sleep "$delay"
+                  done
+
+                  errors=()
+
+                  title_impact="$(impact "$PR_TITLE" "")"
+                  if [[ -z "$title_impact" ]]; then
+                      errors+=("the PR title is not a Conventional Commit header: \"${PR_TITLE}\"")
+                  fi
+
+                  count="$(jq 'length' <<<"$commits_json")"
+                  if (( count >= LIMIT )); then
+                      errors+=("the PR has ${count}+ commits — the gate checks only the first ${LIMIT}; split the PR")
+                  fi
+
+                  max=none
+                  max_commit=''
+                  for (( i = 0; i < count; i++ )); do
+                      sha="$(jq -r ".[$i].sha" <<<"$commits_json")"
+                      sha="${sha:0:7}"
+                      message="$(jq -r ".[$i].commit.message" <<<"$commits_json")"
+                      message="${message//$'\r\n'/$'\n'}"
+                      # The first line is the headline, the rest (its leading blank lines dropped) the body.
+                      headline="${message%%$'\n'*}"
+                      body=''
+                      if [[ "$message" == *$'\n'* ]]; then
+                          body="${message#*$'\n'}"
+                          body="${body#"${body%%[!$'\n']*}"}"
+                      fi
+                      [[ "$headline" == "Merge "* ]] && continue
+                      commit_impact="$(impact "$headline" "$body")"
+                      if [[ -z "$commit_impact" ]]; then
+                          errors+=("commit ${sha} is not a Conventional Commit: \"${headline}\"")
+                          continue
+                      fi
+                      if (( $(rank "$commit_impact") > $(rank "$max") )); then
+                          max="$commit_impact"
+                          max_commit="${sha} \"${headline}\""
+                      fi
+                  done
+
+                  # The equality verdict is only meaningful once the title and every commit parse.
+                  if [[ -n "$title_impact" ]] && (( ${#errors[@]} == 0 )) && [[ "$title_impact" != "$max" ]]; then
+                      if [[ -n "$max_commit" ]]; then
+                          computed="${max} (commit ${max_commit})"
+                      else
+                          computed="none (no commit carries a release)"
+                      fi
+                      errors+=("release impact mismatch: the title says ${title_impact}, the commits compute ${computed} — retitle the PR (or fix the commits) so both agree")
+                  fi
+
+                  if (( ${#errors[@]} > 0 )); then
+                      for error in "${errors[@]}"; do
+                          echo "::error title=PR semantics::${error}"
+                      done
+                      {
+                          echo "PR semantics gate failed for ${REPO}#${PR_NUMBER}:"
+                          printf ' ✘ %s\n' "${errors[@]}"
+                          cat <<'DOC'
+
+                  The contract:
+                    · title and every commit:  <type>[(scope)][!]: <subject>
+                      types: feat fix docs style refactor perf test build ci chore revert
+                    · release impact of the title == max release impact of the commits
+                      major = "!" or a "BREAKING CHANGE:" footer · minor = feat · patch = fix, revert · none = the rest
+                    · merge commits are exempt; autosquash fixup!/squash! before merging
+                  DOC
+                      } | tee -a "$GITHUB_STEP_SUMMARY" >&2
+                      exit 1
+                  fi
+
+                  echo "✓ ${REPO}#${PR_NUMBER}: title impact = ${title_impact}, commits agree (${count} commits)" \
+                      | tee -a "$GITHUB_STEP_SUMMARY"

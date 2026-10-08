@@ -173,7 +173,8 @@ kubectl -n tq-operator get deploy tq-operator -o json | jq '.spec.template.spec 
 - volumes of type `projected`, `configMap` and `emptyDir` only — no Secret.
 
 The image is a single static binary (`CGO_ENABLED=0`) on `gcr.io/distroless/static-debian12:nonroot`,
-for linux/amd64 and linux/arm64. Both of its base images are pinned by digest in the `Dockerfile`.
+for linux/amd64 and linux/arm64. Its base image is pinned by digest in the `Dockerfile`, which only
+copies the binary; the same binaries are attached to the GitHub Release with `SHA256SUMS`.
 
 **Pending (a later release, with the signed-image catalogue):**
 

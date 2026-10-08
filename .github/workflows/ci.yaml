@@ -3,6 +3,9 @@ name: 'CI'
 # vet · unit tests + the envtest suite · golangci-lint · generated artifacts are fresh ·
 # both architectures compile — and the kind e2e: the CRD, an Estate and a fake Deployment
 # in a real cluster, the operator reporting to a console that does not exist.
+#
+# A public repository: every job runs on a GitHub-hosted runner and never on a self-hosted
+# one, because a pull request from a fork runs these jobs with its own code.
 
 on:
     pull_request:
@@ -26,7 +29,7 @@ env:
 jobs:
     checks:
         name: Vet, test, lint, generated
-        runs-on: ${{ vars.TEQUILA_RUNS_ON || 'ubuntu-latest' }}
+        runs-on: ubuntu-latest
         timeout-minutes: 25
         steps:
             - name: Checkout
@@ -62,18 +65,17 @@ jobs:
               with:
                   version: v2.14.0
 
+            # The same target the release builds its binaries with (CGO_ENABLED=0, into ./dist).
             - name: Both architectures compile (CGO_ENABLED=0)
               run: |
-                  for arch in amd64 arm64; do
-                      CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -ldflags="-s -w" -o "/tmp/tq-operator-$arch" ./cmd
-                      echo "linux/$arch: $(du -h "/tmp/tq-operator-$arch" | cut -f1)"
-                  done
+                  make dist
+                  du -h dist/tq-operator-linux-*
 
     e2e:
         name: kind e2e
         needs: checks
-        # kind needs a Docker daemon that runs privileged containers: a GitHub-hosted runner,
-        # not the estate's runner plane.
+        # kind needs a Docker daemon that runs privileged containers, which a GitHub-hosted
+        # runner has.
         runs-on: ubuntu-latest
         timeout-minutes: 30
         steps:

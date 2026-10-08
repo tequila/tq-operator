@@ -141,13 +141,18 @@ The tests that hold the envelope:
 ## Releases
 
 Every PR is squash-merged, and titles and commits follow Conventional Commits (`pr-semantics`).
-`release-please` keeps the release PR current; merging it tags `vX.Y.Z`. The tag fires
-[release.yaml](.github/workflows/release.yaml), which:
+`release-please` keeps the release PR current; merging it tags `vX.Y.Z` and publishes the GitHub
+Release. In the same workflow run, [release.yaml](.github/workflows/release.yaml):
 
-- builds `platform/tq-operator:vX.Y.Z` for linux/amd64 and linux/arm64 through the
-  organisation's shared build workflow;
+- builds the two static binaries (`make dist`) and assembles
+  `registry.tequila.dev/platform/tq-operator:vX.Y.Z` for linux/amd64 and linux/arm64 from them;
+  the job logs in to the registry with its own GitHub OIDC identity, exchanged at Tequila IAM,
+  and no stored credential;
 - attaches to the GitHub Release: `estates.estate.tequila.dev.yaml` (the CRD),
-  `estate.v1alpha1.json`, `report.estate.v1.json`, `rbac.observe.yaml` and `SHA256SUMS`.
+  `estate.v1alpha1.json`, `report.estate.v1.json`, `rbac.observe.yaml`, the binaries
+  `tq-operator-linux-amd64` and `tq-operator-linux-arm64`, and `SHA256SUMS`.
+
+Every workflow runs on GitHub-hosted runners with the default `GITHUB_TOKEN`.
 
 An estate's render vendors those assets per release: the operator's version moves with the
 platform estate's version, like every other estate component.

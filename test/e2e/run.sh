@@ -23,7 +23,8 @@ trap dump ERR
 
 fail() { echo "::error title=e2e::$*"; dump; exit 1; }
 
-echo "— the image"
+echo "— the image (the static binary for the Docker daemon's architecture, then the Dockerfile copies it)"
+make "dist-$(docker version --format '{{.Server.Arch}}')"
 docker build -t "$IMG" .
 kind load docker-image "$IMG" --name "$CLUSTER"
 

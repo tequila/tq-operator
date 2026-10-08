@@ -57,8 +57,20 @@ envtest:
 build:
 	CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o $(LOCALBIN)/tq-operator ./cmd
 
+## The static linux binaries the Dockerfile copies: dist/tq-operator-linux-<arch>.
+## `make dist-arm64` builds one; `make dist` builds both.
+DIST_ARCHES ?= amd64 arm64
+
+.PHONY: dist
+dist: $(addprefix dist-,$(DIST_ARCHES))
+
+dist-%:
+	CGO_ENABLED=0 GOOS=linux GOARCH=$* go build -trimpath -ldflags="-s -w" -o dist/tq-operator-linux-$* ./cmd
+
+## The image for the Docker daemon's own architecture.
 .PHONY: docker-build
 docker-build:
+	$(MAKE) dist-$$(docker version --format '{{.Server.Arch}}')
 	docker build -t $(IMG) .
 
 ## The kind e2e — CI runs it (test/e2e/run.sh); it needs a Docker daemon and kind.
