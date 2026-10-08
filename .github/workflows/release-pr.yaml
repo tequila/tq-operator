@@ -1,0 +1,16 @@
+name: 'Release PR'
+
+# The standing release-please PR: merging it IS the release — tag vX.Y.Z + GitHub Release,
+# which fires release.yaml (the image, the CRD and the schemas as release assets).
+# Config: release-please-config.json (release-type go; extra-files bump the version
+# in internal/version and the image reference in config/manager) + .release-please-manifest.json.
+
+on:
+    push:
+        branches: [ "main" ]
+
+jobs:
+    release-please:
+        if: ${{ vars.TEQUILA_RELEASE_AUTOMATION != 'false' }}
+        uses: tequila/tequila-gha/.github/workflows/release-pr.yaml@main
+        secrets: inherit

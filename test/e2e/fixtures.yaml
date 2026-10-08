@@ -1,0 +1,40 @@
+# What the e2e observes: an Estate, as a render emits it, and a fake Deployment in the
+# services namespace.
+apiVersion: estate.tequila.dev/v1alpha1
+kind: Estate
+metadata:
+  name: e2e
+  namespace: tq-operator
+  labels: { app.kubernetes.io/part-of: tequila, estate.tequila.dev/environment: e2e }
+spec:
+  product: acme/acme
+  environment: e2e
+  source: { repository: acme/gitops }
+  renderer: { klass8s-cli: v0.1.1, manifests-core: v0.23.0, tq-cli: v0.72.0 }
+  platform: { operations-k8s: v0.50.0 }
+  profile: { cloud: generic, nats_in_cluster: true, backup: { provider: none } }
+  namespaces: { platform: operations, services: tequila }
+  services:
+    iam: { repo: tequila/iam, version: v0.45.4 }
+    fake: { own: true }
+  operator:
+    capabilities: [observe]
+    report: { interval: 1m }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fake
+  namespace: tequila
+  labels: { app.kubernetes.io/name: fake, app.kubernetes.io/component: api }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: fake, app.kubernetes.io/component: api }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: fake, app.kubernetes.io/component: api }
+    spec:
+      containers:
+        - name: app
+          image: registry.k8s.io/pause:3.10

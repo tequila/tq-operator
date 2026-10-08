@@ -1,0 +1,9 @@
+# Only what the build stage copies.
+*
+!go.mod
+!go.sum
+!api/
+!cmd/
+!internal/
+**/*_test.go
+**/testdata/

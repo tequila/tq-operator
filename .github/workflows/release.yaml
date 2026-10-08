@@ -1,0 +1,68 @@
+name: 'Release'
+
+# A release tag vX.Y.Z (created by merging the release-please PR) builds the image and
+# attaches the deployable assets to the GitHub Release:
+#   estates.estate.tequila.dev.yaml   the Estate CRD
+#   estate.v1alpha1.json              the Estate's published schema
+#   report.estate.v1.json             the estate report's published schema
+#   rbac.observe.yaml                 the RBAC of rung observe, as the markers generate it
+#   SHA256SUMS
+
+on:
+    push:
+        tags:
+            - 'v*'
+
+jobs:
+    # The image (platform/tq-operator, linux/arm64 + linux/amd64) comes from the
+    # organisation's shared build workflow.
+    image:
+        permissions:
+            contents: read
+            id-token: write
+        uses: tequila/operations-github-actions/.github/workflows/docker-build-push.yaml@main
+        with:
+            image-name: platform/tq-operator
+            context: .
+            tags: ${{ github.ref_name }}
+            registry-provider: tequila
+        secrets: inherit
+
+    assets:
+        name: The CRD and the schemas as release assets
+        runs-on: ${{ vars.TEQUILA_RUNS_ON || 'ubuntu-latest' }}
+        timeout-minutes: 10
+        permissions:
+            contents: write
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v7
+              timeout-minutes: 5
+
+            - name: The assets
+              run: |
+                  set -euo pipefail
+                  mkdir -p dist
+                  cp config/crd/bases/estate.tequila.dev_estates.yaml dist/estates.estate.tequila.dev.yaml
+                  cp schemas/estate.v1alpha1.json schemas/report.estate.v1.json dist/
+                  cp config/rbac/observe/role.yaml dist/rbac.observe.yaml
+                  (cd dist && sha256sum -- * > SHA256SUMS && cat SHA256SUMS)
+
+            # release-please created the Release with the tag; it is waited for briefly in case
+            # the tag event outran it.
+            - name: Attach them to the release
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  TAG: ${{ github.ref_name }}
+              run: |
+                  set -euo pipefail
+                  for attempt in 1 2 3 4 5 6; do
+                      if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+                          gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
+                          exit 0
+                      fi
+                      echo "the release $TAG does not exist yet (attempt $attempt); waiting 10 s"
+                      sleep 10
+                  done
+                  echo "::error title=release::no GitHub Release $TAG to attach the assets to"
+                  exit 1

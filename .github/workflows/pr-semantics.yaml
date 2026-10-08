@@ -1,0 +1,21 @@
+name: 'PR Semantics'
+
+# The PR-level release contract: conventional title, conventional commits, title release
+# impact == max commit impact. `edited` is in the trigger on purpose — retitling re-runs the
+# gate.
+
+on:
+    pull_request:
+        branches: [ "main" ]
+        types: [ opened, edited, reopened, synchronize ]
+
+jobs:
+    semantics:
+        if: ${{ vars.TEQUILA_RELEASE_AUTOMATION != 'false' }}
+        # Explicit grant: the called gate job requests contents+pull-requests read,
+        # and a nested job may not exceed what the caller allows.
+        permissions:
+            contents: read
+            pull-requests: read
+        uses: tequila/tequila-gha/.github/workflows/pr-semantics.yaml@main
+        secrets: inherit
