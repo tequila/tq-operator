@@ -1,0 +1,19 @@
+# The kubebuilder v4 layout this repository follows (no kubebuilder CLI is required:
+# controller-gen and setup-envtest run through `go run`, see the Makefile).
+cliVersion: 4.x
+domain: tequila.dev
+layout:
+  - go.kubebuilder.io/v4
+projectName: tq-operator
+repo: github.com/tequila/tq-operator
+resources:
+  - api:
+      crdVersion: v1
+      namespaced: true
+    controller: true
+    domain: tequila.dev
+    group: estate
+    kind: Estate
+    path: github.com/tequila/tq-operator/api/v1alpha1
+    version: v1alpha1
+version: "3"

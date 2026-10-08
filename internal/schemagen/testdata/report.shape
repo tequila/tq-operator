@@ -1,0 +1,93 @@
+# The estate report `tequila.dev/report/estate/v1` — the contract, written by hand one JSON
+# pointer per line: "<path> <type>[ annotations]". `{}` is a map's value, `[]` an array's item.
+# schemagen_test.go holds the generated schemas/report.estate.v1.json equal to this.
+# declared.source is {repository}: no revision, no timestamp — the spec is a pure function of
+# tequila.yaml. A cap or a nullability that needs a reason has it after a `#`.
+/ object
+/applied object|null
+/applied/kustomizations array maxItems=200
+/applied/kustomizations/[] object
+/applied/kustomizations/[]/appliedRevision string|null     # null before Flux applied anything
+/applied/kustomizations/[]/lastReconcile string|null format=date-time   # the Ready condition's last transition; null before one
+/applied/kustomizations/[]/name string
+/applied/kustomizations/[]/ready boolean
+/applied/kustomizations/[]/reason string
+/applied/source object
+/applied/source/kind string enum=GitRepository|OCIRepository
+/applied/source/name string
+/applied/source/revision string|null                        # null before the source's first artifact
+/cluster object
+/cluster/kubernetes string
+/cluster/nodes object
+/cluster/nodes/architectures array maxItems=8              # a bound of the implementation
+/cluster/nodes/architectures/[] string
+/cluster/nodes/count integer
+/cluster/nodes/kubeletVersions array maxItems=32           # a bound of the implementation
+/cluster/nodes/kubeletVersions/[] string
+/cluster/platform string enum=eks|k3s|doks|generic
+/declared object|null
+/declared/generation integer
+/declared/platform object
+/declared/platform/{} string
+/declared/renderer object
+/declared/renderer/klass8s-cli string|null                 # null where tequila.yaml pins none
+/declared/renderer/manifests-core string|null
+/declared/renderer/tq-cli string|null
+/declared/services object
+/declared/services/{} object
+/declared/services/{}/own boolean
+/declared/services/{}/repo string|null
+/declared/services/{}/version string|null
+/declared/source object
+/declared/source/repository string
+/drift array maxItems=200
+/drift/[] object
+/drift/[]/declared string|null
+/drift/[]/kind string enum=RunningBehind|AppliedBehind|NotReady|SecretNotResolvable|Undeclared|NoEstate
+/drift/[]/observed string|null
+/drift/[]/subject string
+/estate object
+/estate/account string
+/estate/environment string
+/estate/product string|null
+/externalSecrets object
+/externalSecrets/notReady array maxItems=100
+/externalSecrets/notReady/[] object
+/externalSecrets/notReady/[]/name string
+/externalSecrets/notReady/[]/namespace string
+/externalSecrets/notReady/[]/reason string
+/externalSecrets/ready integer
+/externalSecrets/total integer
+/health object
+/health/pods object
+/health/pods/crashLooping array maxItems=100
+/health/pods/crashLooping/[] string
+/health/pods/failed integer
+/health/pods/pending integer
+/health/pods/running integer
+/operator object
+/operator/capabilities array maxItems=4                     # the ladder has four rungs
+/operator/capabilities/[] string enum=observe|verify|gate|act
+/operator/image string
+/operator/version string
+/preflight array maxItems=0                                 # "[] at observe": no item may be carried
+/reportedAt string format=date-time
+/running object
+/running/estate object
+/running/estate/operationsK8s string|null
+/running/truncated boolean
+/running/workloads array maxItems=500
+/running/workloads/[] object
+/running/workloads/[]/images array maxItems=16             # a bound of the implementation
+/running/workloads/[]/images/[] object
+/running/workloads/[]/images/[]/digest string|null
+/running/workloads/[]/images/[]/ref string
+/running/workloads/[]/images/[]/signature string enum=unverified|valid|invalid|unsigned
+/running/workloads/[]/kind string enum=Deployment          # the one workload kind the RBAC reads
+/running/workloads/[]/name string
+/running/workloads/[]/namespace string
+/running/workloads/[]/replicas object
+/running/workloads/[]/replicas/desired integer
+/running/workloads/[]/replicas/ready integer
+/running/workloads/[]/service string|null
+/schema string const=tequila.dev/report/estate/v1

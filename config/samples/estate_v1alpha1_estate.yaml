@@ -1,0 +1,30 @@
+# An Estate as an environment's render emits it: a pure function of tequila.yaml, no commit and
+# no timestamp. Flux applies it; the operator writes its status.
+apiVersion: estate.tequila.dev/v1alpha1
+kind: Estate
+metadata:
+  name: prod
+  namespace: tq-operator
+  labels: { app.kubernetes.io/part-of: tequila, estate.tequila.dev/environment: prod }
+spec:
+  product: acme/acme
+  environment: prod
+  source:
+    repository: acme/gitops
+  renderer: { klass8s-cli: v0.1.1, manifests-core: v0.23.0, tq-cli: v0.72.0 }
+  platform: { operations-k8s: v0.50.0, tofu: "1.12.6", opentofu-modules: v0.10.0 }
+  profile:
+    cloud: generic
+    mongodb_in_cluster: false
+    nats_in_cluster: true
+    valkey_in_cluster: true
+    monitoring_in_cluster: true
+    keda_in_cluster: true
+    backup: { provider: atlas }
+  namespaces: { platform: operations, services: tequila }
+  services:
+    iam: { repo: tequila/iam, version: v0.45.4 }
+    backend: { own: true }
+  operator:
+    capabilities: [observe]
+    report: { enabled: true, ownServices: true, interval: 15m }
