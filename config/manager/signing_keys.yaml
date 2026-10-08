@@ -1,0 +1,10 @@
+# The public keys the operator verifies its own image with — rendered from the release
+# catalogue's signing-key list; empty until image signing ships.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tq-operator-signing-keys
+  namespace: tq-operator
+  labels: { app.kubernetes.io/name: tq-operator, app.kubernetes.io/part-of: tequila }
+data:
+  signing-keys.json: "[]"

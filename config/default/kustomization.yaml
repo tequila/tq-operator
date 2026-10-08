@@ -1,0 +1,7 @@
+# The whole operator at rung observe: the CRD, the read-only RBAC, the namespace, the Pod and
+# its NetworkPolicy. An estate's render produces the same objects from tequila.yaml; this base
+# is what it mirrors and what the e2e applies.
+resources:
+  - ../crd
+  - ../rbac/observe
+  - ../manager

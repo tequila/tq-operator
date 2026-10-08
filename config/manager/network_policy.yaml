@@ -1,0 +1,21 @@
+# Nothing in, DNS and HTTPS to public addresses out (IAM and the console — the operator holds
+# the two hostnames itself), OTLP to the estate's Alloy. The API server is reached as every Pod
+# reaches it; on a CNI that enforces egress to the API server the render adds that rule.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tq-operator
+  namespace: tq-operator
+  labels: { app.kubernetes.io/name: tq-operator, app.kubernetes.io/part-of: tequila }
+spec:
+  podSelector: { matchLabels: { app.kubernetes.io/name: tq-operator } }
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to: [ { namespaceSelector: {}, podSelector: { matchLabels: { k8s-app: kube-dns } } } ]
+      ports: [ { protocol: UDP, port: 53 }, { protocol: TCP, port: 53 } ]
+    - to: [ { ipBlock: { cidr: 0.0.0.0/0, except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16] } } ]
+      ports: [ { protocol: TCP, port: 443 } ]
+    - to: [ { namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: operations } },
+              podSelector: { matchLabels: { app.kubernetes.io/name: alloy } } } ]
+      ports: [ { protocol: TCP, port: 4317 } ]

@@ -1,0 +1,69 @@
+# The RBAC of rung observe, written by hand. rbac_golden_test.go holds the Roles controller-gen
+# generates from the markers (config/rbac/observe/role.yaml) equal to this file, rule for rule;
+# an estate's render is held equal to it too.
+#
+# The Flux Role is in flux-system, not in the platform namespace: every render puts every
+# Kustomization, the flux-system GitRepository and the FluxInstance in flux-system.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole                              # Nodes are cluster-scoped; everything else is namespaced below
+metadata: { name: tq-operator-observe-cluster }
+rules:
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role                                     # the operator's own namespace: its resources, its record
+metadata: { name: tq-operator-self, namespace: tq-operator }
+rules:
+  - apiGroups: [estate.tequila.dev]
+    resources: [estates]
+    verbs: [get, list, watch]
+  - apiGroups: [estate.tequila.dev]
+    resources: [estates/status]
+    verbs: [get, update, patch]                # the ONE write of rung observe
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [create, patch]                     # Events on the Estate — `kubectl describe estate` tells the story
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role                                     # one per estate namespace: the services namespace…
+metadata: { name: tq-operator-observe, namespace: tequila }
+rules:
+  - apiGroups: [apps]
+    resources: [deployments, replicasets]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch]
+  - apiGroups: [external-secrets.io]
+    resources: [externalsecrets]
+    verbs: [get, list, watch]                  # the object carries remote key NAMES and status, never a value
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role                                     # …and the platform namespace
+metadata: { name: tq-operator-observe, namespace: operations }
+rules:
+  - apiGroups: [apps]
+    resources: [deployments, replicasets]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch]
+  - apiGroups: [external-secrets.io]
+    resources: [externalsecrets]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role                                     # Flux's namespace, where its objects live per the render
+metadata: { name: tq-operator-observe-flux, namespace: flux-system }
+rules:
+  - apiGroups: [kustomize.toolkit.fluxcd.io]
+    resources: [kustomizations]
+    verbs: [get, list, watch]
+  - apiGroups: [source.toolkit.fluxcd.io]
+    resources: [gitrepositories, ocirepositories]
+    verbs: [get, list, watch]
+  - apiGroups: [fluxcd.controlplane.io]
+    resources: [fluxinstances]
+    verbs: [get, list, watch]

@@ -1,0 +1,10 @@
+# The operator's own namespace. Restricted Pod Security is enforced by the API server, not
+# promised by a manifest: a Pod that drops a restriction is refused admission.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tq-operator
+  labels:
+    app.kubernetes.io/part-of: tequila
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
