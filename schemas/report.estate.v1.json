@@ -2,7 +2,7 @@
   "$id": "https://docs.tequila.dev/schemas/report.estate.v1.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "The estate report tq-operator sends to the console: Estate.status plus the declared echo and the operator's identity. Every key is required; an absent value is null.",
+  "description": "The estate report tq-operator sends to the console: Estate.status plus the declared echo and the operator's identity. Every key is required; an absent value is null. Versioning: the schema grows additively within v1 — a later release may add properties, each optional in the schema and always sent by the operator that added it; nothing is removed, renamed or retyped. A report from an older operator validates against a newer schema; a newer report validates against an older schema once the properties that schema lacks are removed.",
   "properties": {
     "applied": {
       "additionalProperties": false,
@@ -19,6 +19,10 @@
                   "string",
                   "null"
                 ]
+              },
+              "attached": {
+                "description": "Attached is true when the Kustomization is suspended AND carries the attachment annotation (tequila.dev/attached-by) a developer's inner loop writes when it runs a local checkout over the rendered workloads. The workloads it applies report state attached, and neither they nor the Kustomization are drift. Only the annotation's presence is read; who attached is never held or reported.",
+                "type": "boolean"
               },
               "lastReconcile": {
                 "description": "LastReconcile is the Ready condition's last transition.",
@@ -40,6 +44,10 @@
                 "description": "Reason is the Ready condition's reason — Flux's own word, never its message.",
                 "maxLength": 512,
                 "type": "string"
+              },
+              "suspended": {
+                "description": "Suspended is spec.suspend: Flux applies nothing from it until it is resumed.",
+                "type": "boolean"
               }
             },
             "required": [
@@ -506,6 +514,10 @@
             "additionalProperties": false,
             "description": "Workload is one Deployment of the two estate namespaces.",
             "properties": {
+              "crashLooping": {
+                "description": "CrashLooping is true while a container of one of the workload's Pods waits in CrashLoopBackOff, or lies terminated with at least one restart behind it in a Pod that is still running (the kubelet will start it again).",
+                "type": "boolean"
+              },
               "images": {
                 "items": {
                   "additionalProperties": false,
@@ -577,6 +589,10 @@
                 ],
                 "type": "object"
               },
+              "restarts": {
+                "description": "Restarts is the sum of the container restart counts over the workload's current Pods.",
+                "type": "integer"
+              },
               "service": {
                 "description": "Service is the registered service the workload belongs to; null for the estate's own workloads and for a tenant's own services.",
                 "maxLength": 512,
@@ -584,6 +600,19 @@
                   "string",
                   "null"
                 ]
+              },
+              "state": {
+                "description": "State is managed, or attached while a developer's inner loop runs a checkout over it.",
+                "enum": [
+                  "managed",
+                  "attached"
+                ],
+                "maxLength": 512,
+                "type": "string"
+              },
+              "undeclared": {
+                "description": "Undeclared is true for a services-namespace workload whose image is a platform image (its repository path is platform/<name>) and whose service spec.services does not list — such a workload is also an Undeclared drift. Never true in the platform namespace.",
+                "type": "boolean"
               }
             },
             "required": [

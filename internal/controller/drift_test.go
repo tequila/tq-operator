@@ -39,6 +39,7 @@ func TestImageServiceAndTag(t *testing.T) {
 		{"registry.tequila.dev/platform/media-api:v1.0.0@sha256:abc", "media", "v1.0.0"},
 		{"registry.tequila.dev/acme/iam-api:v1", "", "v1"},
 		{"registry.tequila.dev/platform/backend-api:v1", "", "v1"},
+		{"ghcr.io/example-org/platform/iam-api:v2", "iam", "v2"},
 		{"localhost:5000/platform/iam-api", "iam", ""},
 		{"platform/iam", "iam", ""},
 	}
@@ -49,6 +50,148 @@ func TestImageServiceAndTag(t *testing.T) {
 		if got := imageTag(c.ref); got != c.tag {
 			t.Errorf("imageTag(%s) = %q, want %q", c.ref, got, c.tag)
 		}
+	}
+	// The path decides what a platform image is, never the host.
+	for ref, want := range map[string]bool{
+		"registry.tequila.dev/platform/ghost-api:v1":              true,
+		"123456789012.dkr.ecr.eu-west-1.amazonaws.com/platform/x": true,
+		"localhost:5000/platform/x@sha256:abc":                    true,
+		"platform/x":                                              true,
+		"registry.tequila.dev/acme/platform-api:v1":               false,
+		"registry.tequila.dev/platform:v1":                        false,
+		"registry.example.com/example-org/x:v1":                   false,
+	} {
+		if got := isPlatformImage(ref); got != want {
+			t.Errorf("isPlatformImage(%s) = %v, want %v", ref, got, want)
+		}
+	}
+}
+
+// A workload in the services namespace running a platform image no declared service accounts
+// for is reported as undeclared — whatever ownServices says — and is an Undeclared drift; one
+// a declared service's name accounts for by its image is not, nor is anything in the platform
+// namespace, nor a tenant's own image.
+func TestUndeclaredPlatformWorkloads(t *testing.T) {
+	obs := &observe.Observation{Workloads: []observe.Workload{
+		w("operations", "tq-operator", "tq-operator", 1, 1, "registry.tequila.dev/platform/tq-operator:v0.2.0"),
+		w("tequila", "ghost-api", "ghost", 1, 1, "registry.example.com/platform/ghost-api:v1.0.0"),
+		w("tequila", "iam-mailer", "", 1, 1, "registry.tequila.dev/platform/iam-mailer:v0.45.4"),
+		w("tequila", "backend-api", "backend", 1, 1, "registry.example.com/acme/backend-api:v1"),
+		w("tequila", "sidecar", "", 1, 1, "registry.example.com/acme/sidecar:v1"),
+	}}
+	for _, ownServices := range []bool{true, false} {
+		st := Observed(spec(), obs, scope, ownServices)
+		undeclared := map[string]bool{}
+		for _, wl := range st.Running.Workloads {
+			undeclared[wl.Name] = wl.Undeclared
+		}
+		if !undeclared["ghost-api"] {
+			t.Errorf("ownServices %v: ghost-api is not undeclared", ownServices)
+		}
+		if undeclared["tq-operator"] || undeclared["iam-mailer"] || undeclared["backend-api"] || undeclared["sidecar"] {
+			t.Errorf("ownServices %v: undeclared = %v", ownServices, undeclared)
+		}
+		var drift []string
+		for _, d := range st.Drift {
+			drift = append(drift, string(d.Kind)+" "+d.Subject+" "+deref(d.Declared)+"→"+deref(d.Observed))
+		}
+		if want := "Undeclared tequila/ghost-api —→registry.example.com/platform/ghost-api:v1.0.0"; strings.Join(drift, "|") != want {
+			t.Errorf("ownServices %v: drift %q, want %q", ownServices, strings.Join(drift, "|"), want)
+		}
+		if _, present := undeclared["sidecar"]; present != ownServices {
+			t.Errorf("ownServices %v: a tenant's own unaccounted-for workload reported: %v", ownServices, present)
+		}
+	}
+	// No Estate: nothing is undeclared, there is nothing to be declared in.
+	for _, wl := range Observed(nil, obs, scope, true).Running.Workloads {
+		if wl.Undeclared {
+			t.Errorf("no Estate, yet %s is undeclared", wl.Name)
+		}
+	}
+}
+
+// A developer's checkout running over a workload — its Kustomization suspended and annotated —
+// reports state attached and is never drift: not RunningBehind, not NotReady, not Undeclared;
+// nor is the Kustomization AppliedBehind or NotReady. A suspended Kustomization without the
+// annotation changes nothing.
+func TestAttachedWorkloadsAreNeverDrift(t *testing.T) {
+	a, b := "main@sha1:aaa", "main@sha1:bbb"
+	attachedWorkload := w("tequila", "iam-worker", "iam", 1, 0, "registry.tequila.dev/platform/iam-worker:dev-abc123")
+	attachedWorkload.Kustomization = "services-iam-worker"
+	attachedGhost := w("tequila", "ghost-api", "ghost", 1, 0, "registry.example.com/platform/ghost-api:v1.0.0")
+	attachedGhost.Kustomization = "services-iam-worker"
+	suspendedOnly := w("tequila", "iam-api", "iam", 1, 0, "registry.tequila.dev/platform/iam-api:v0.45.3")
+	suspendedOnly.Kustomization = "services-iam-api"
+	obs := &observe.Observation{
+		Workloads: []observe.Workload{attachedWorkload, attachedGhost, suspendedOnly},
+		Flux: &observe.Flux{
+			Sources: map[string]*string{"GitRepository/flux-system": &b},
+			Kustomizations: []observe.Kustomization{
+				{Name: "services-iam-api", SourceKey: "GitRepository/flux-system", Suspended: true, AppliedRevision: &a, ReadyStatus: "False", Reason: "HealthCheckFailed"},
+				{Name: "services-iam-worker", SourceKey: "GitRepository/flux-system", Suspended: true, AttachAnnotated: true, AppliedRevision: &a, ReadyStatus: "False", Reason: "HealthCheckFailed"},
+				{Name: "services-stale", SourceKey: "GitRepository/flux-system", AttachAnnotated: true, AppliedRevision: &a, ReadyStatus: "True"},
+			},
+			Primary: "GitRepository/flux-system",
+		},
+	}
+	st := Observed(spec(), obs, scope, true)
+	states := map[string]estatev1alpha1.WorkloadState{}
+	for _, wl := range st.Running.Workloads {
+		states[wl.Name] = wl.State
+	}
+	if states["iam-worker"] != estatev1alpha1.WorkloadAttached || states["ghost-api"] != estatev1alpha1.WorkloadAttached || states["iam-api"] != estatev1alpha1.WorkloadManaged {
+		t.Errorf("states %v", states)
+	}
+	var got []string
+	for _, d := range st.Drift {
+		got = append(got, string(d.Kind)+" "+d.Subject)
+	}
+	// Only the suspended-without-annotation unit and its workload drift, as before.
+	want := "RunningBehind tequila/iam-api|AppliedBehind services-iam-api|AppliedBehind services-stale|NotReady services-iam-api|NotReady tequila/iam-api"
+	if strings.Join(got, "|") != want {
+		t.Errorf("drift\n%s\nwant\n%s", strings.Join(got, "|"), want)
+	}
+	byName := map[string]estatev1alpha1.KustomizationStatus{}
+	for _, k := range st.Applied.Kustomizations {
+		byName[k.Name] = k
+	}
+	if k := byName["services-iam-worker"]; !k.Suspended || !k.Attached {
+		t.Errorf("services-iam-worker %+v", k)
+	}
+	if k := byName["services-iam-api"]; !k.Suspended || k.Attached {
+		t.Errorf("services-iam-api %+v", k)
+	}
+	if k := byName["services-stale"]; k.Suspended || k.Attached {
+		t.Errorf("a stale annotation on a resumed Kustomization attaches nothing: %+v", k)
+	}
+}
+
+// A crash loop is on the workload (crashLooping, the restart sum) and in health — not drift.
+func TestCrashLoopsAreOnTheWorkload(t *testing.T) {
+	crasher := w("tequila", "iam-worker", "iam", 1, 1, "registry.tequila.dev/platform/iam-worker:v0.45.4")
+	crasher.CrashLooping, crasher.Restarts = true, 7
+	obs := &observe.Observation{
+		Workloads: []observe.Workload{crasher, w("tequila", "iam-api", "iam", 1, 1, "registry.tequila.dev/platform/iam-api:v0.45.4")},
+		Pods:      observe.PodSummary{Running: 2, CrashLooping: []string{"tequila/iam-worker"}},
+	}
+	st := Observed(spec(), obs, scope, true)
+	for _, wl := range st.Running.Workloads {
+		switch wl.Name {
+		case "iam-worker":
+			if !wl.CrashLooping || wl.Restarts != 7 {
+				t.Errorf("iam-worker %+v", wl)
+			}
+		case "iam-api":
+			if wl.CrashLooping || wl.Restarts != 0 {
+				t.Errorf("iam-api %+v", wl)
+			}
+		}
+	}
+	if len(st.Drift) != 0 {
+		t.Errorf("a crash loop is not drift: %+v", st.Drift)
+	}
+	if got := strings.Join(st.Health.Pods.CrashLooping, ","); got != "tequila/iam-worker" {
+		t.Errorf("health.crashLooping %s", got)
 	}
 }
 

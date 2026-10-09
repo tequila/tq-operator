@@ -1,5 +1,7 @@
-# What the e2e observes: an Estate, as a render emits it, and a fake Deployment in the
-# services namespace.
+# What the e2e observes: an Estate, as a render emits it, and four Deployments in the services
+# namespace — a tenant's own service that runs, a crash loop, a platform image the Estate does
+# not declare, and a declared service a developer has attached to (its Flux Kustomization
+# suspended and annotated the way the inner loop does it).
 apiVersion: estate.tequila.dev/v1alpha1
 kind: Estate
 metadata:
@@ -16,11 +18,13 @@ spec:
   namespaces: { platform: operations, services: tequila }
   services:
     iam: { repo: tequila/iam, version: v0.45.4 }
+    attached: { repo: tequila/attached, version: v1.0.0 }
     fake: { own: true }
   operator:
     capabilities: [observe]
     report: { interval: 1m }
 ---
+# A tenant's own service, running.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -38,3 +42,92 @@ spec:
       containers:
         - name: app
           image: registry.k8s.io/pause:3.10
+---
+# A crash loop: the operator's own binary (an image kind already holds, so nothing is pulled)
+# refuses an unknown flag and exits non-zero; the kubelet restarts it and backs off, the restart
+# count grows. Whether this kubelet reports the back-off as CrashLoopBackOff or leaves the
+# container terminated between starts, the operator calls it a crash loop.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: crasher
+  namespace: tequila
+  labels: { app.kubernetes.io/name: crasher, app.kubernetes.io/component: worker }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: crasher, app.kubernetes.io/component: worker }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: crasher, app.kubernetes.io/component: worker }
+    spec:
+      containers:
+        - name: app
+          image: tq-operator:e2e
+          imagePullPolicy: Never
+          args: ["--this-flag-does-not-exist"]
+---
+# A platform image (the path says so, not the host) that spec.services does not list: an
+# Undeclared drift. Scaled to zero so nothing has to pull it — the template is what is judged.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ghost-api
+  namespace: tequila
+  labels: { app.kubernetes.io/name: ghost, app.kubernetes.io/component: api }
+spec:
+  replicas: 0
+  selector:
+    matchLabels: { app.kubernetes.io/name: ghost, app.kubernetes.io/component: api }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: ghost, app.kubernetes.io/component: api }
+    spec:
+      containers:
+        - name: app
+          image: registry.example.com/platform/ghost-api:v1.0.0
+---
+# A declared service a developer attached to: the Deployment carries Flux's labels naming the
+# Kustomization that applied it, and runs a tag that is not the declared version — which is
+# RunningBehind everywhere but here, because the Kustomization below is attached.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: attached-api
+  namespace: tequila
+  labels:
+    app.kubernetes.io/name: attached
+    app.kubernetes.io/component: api
+    kustomize.toolkit.fluxcd.io/name: services-attached
+    kustomize.toolkit.fluxcd.io/namespace: flux-system
+spec:
+  replicas: 0
+  selector:
+    matchLabels: { app.kubernetes.io/name: attached, app.kubernetes.io/component: api }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: attached, app.kubernetes.io/component: api }
+    spec:
+      containers:
+        - name: app
+          image: registry.example.com/platform/attached-api:v9.9.9
+---
+# The suspended Kustomization behind attached-api, annotated as the developer's inner loop
+# does when it mounts a local checkout over the rendered workloads. Only the annotation's
+# presence matters to the operator; its value never reaches the status or the report.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: services-attached
+  namespace: flux-system
+  annotations:
+    tequila.dev/attached-by: developer@example-org
+    tequila.dev/attached-from: /home/developer/src/attached
+    tequila.dev/attached-since: "2026-10-05T12:00:00Z"
+    kustomize.toolkit.fluxcd.io/reconcile: disabled
+spec:
+  interval: 10m
+  prune: true
+  suspend: true
+  path: ./services/attached/e2e
+  sourceRef: { kind: GitRepository, name: flux-system }

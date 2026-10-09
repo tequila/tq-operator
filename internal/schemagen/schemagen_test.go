@@ -78,7 +78,9 @@ func TestReportSchemaEqualsTheContract(t *testing.T) {
 	}
 }
 
-// Every object is closed and requires every key; every string is capped.
+// Every object is closed and requires every key it had at the schema's first release — a key
+// added later is optional, and the contract (testdata/report.shape) names each one; every
+// string is capped.
 func TestReportSchemaIsClosedAndCapped(t *testing.T) {
 	report, _, _, _ := generated(t)
 	var walk func(path string, s map[string]any)
@@ -103,8 +105,15 @@ func TestReportSchemaIsClosedAndCapped(t *testing.T) {
 			}
 			sort.Strings(names)
 			sort.Strings(required)
-			if !slices.Equal(names, required) {
-				t.Errorf("%s: required %v, properties %v — every key is required", path, required, names)
+			for _, r := range required {
+				if !slices.Contains(names, r) {
+					t.Errorf("%s: requires %q, which is not a property", path, r)
+				}
+			}
+			for _, n := range names {
+				if !slices.Contains(required, n) && !slices.Contains(optionalSince, path+"/"+n) {
+					t.Errorf("%s: %q is optional — every key is required unless this test names it as added after the first release", path, n)
+				}
 			}
 		} else if strings.Contains(types, "object") {
 			ap, ok := s["additionalProperties"].(map[string]any)
@@ -183,6 +192,96 @@ func TestValidateCatchesWhatTheSchemaForbids(t *testing.T) {
 			t.Errorf("%s: got %q, want %q", doc, got, want)
 		}
 	}
+}
+
+// optionalSince is every property a release after the first added — optional in the schema,
+// always sent. Additive within v1: this list only grows.
+var optionalSince = []string{
+	"/applied/kustomizations/[]/suspended",
+	"/applied/kustomizations/[]/attached",
+	"/running/workloads/[]/state",
+	"/running/workloads/[]/undeclared",
+	"/running/workloads/[]/crashLooping",
+	"/running/workloads/[]/restarts",
+}
+
+// A report shaped as the first release sent it — every optional property absent — validates
+// against today's schema, and today's report validates against the first release's schema once
+// the properties that schema lacks are removed: the schema grows additively within v1.
+func TestReportSchemaIsAdditiveWithinV1(t *testing.T) {
+	report, _, _, _ := generated(t)
+	first := stripOptional(report)
+	doc := []byte(`{"schema":"tequila.dev/report/estate/v1","estate":{"account":"acme","environment":"prod","product":null},
+	 "reportedAt":"2026-10-05T14:00:00Z","operator":{"version":"0.1.0","image":"img","capabilities":["observe"]},
+	 "declared":null,"cluster":{"kubernetes":"v1.35.1","platform":"generic","nodes":{"count":1,"architectures":["arm64"],"kubeletVersions":["v1.35.1"]}},
+	 "applied":{"source":{"kind":"GitRepository","name":"flux-system","revision":null},
+	   "kustomizations":[{"name":"services-iam","ready":true,"appliedRevision":null,"reason":"ReconciliationSucceeded","lastReconcile":null}]},
+	 "running":{"estate":{"operationsK8s":null},"truncated":false,"workloads":[{"namespace":"tequila","name":"iam-api","kind":"Deployment","service":"iam",
+	   "replicas":{"desired":1,"ready":1},"images":[{"ref":"registry.example.com/platform/iam-api:v1","digest":null,"signature":"unverified"}]}]},
+	 "externalSecrets":{"total":0,"ready":0,"notReady":[]},"drift":[],"preflight":[],"health":{"pods":{"running":1,"pending":0,"failed":0,"crashLooping":[]}}}`)
+	for name, schema := range map[string]map[string]any{"today's schema": report, "the first release's schema": first} {
+		errs, err := Validate(schema, doc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range errs {
+			t.Errorf("a first-release report against %s: %s", name, e)
+		}
+	}
+	var m map[string]any
+	if err := json.Unmarshal(doc, &m); err != nil {
+		t.Fatal(err)
+	}
+	k := m["applied"].(map[string]any)["kustomizations"].([]any)[0].(map[string]any)
+	k["suspended"], k["attached"] = true, true
+	w := m["running"].(map[string]any)["workloads"].([]any)[0].(map[string]any)
+	w["state"], w["undeclared"], w["crashLooping"], w["restarts"] = "attached", false, true, float64(3)
+	today, _ := json.Marshal(m)
+	if errs, _ := Validate(report, today); len(errs) > 0 {
+		t.Errorf("today's report against today's schema: %v", errs)
+	}
+	if errs, _ := Validate(first, today); len(errs) == 0 {
+		t.Error("today's report validates against the first release's schema with the new properties present — the schema is closed, so this must fail")
+	}
+	for _, key := range []string{"suspended", "attached"} {
+		delete(k, key)
+	}
+	for _, key := range []string{"state", "undeclared", "crashLooping", "restarts"} {
+		delete(w, key)
+	}
+	stripped, _ := json.Marshal(m)
+	if errs, _ := Validate(first, stripped); len(errs) > 0 {
+		t.Errorf("today's report minus the new properties against the first release's schema: %v", errs)
+	}
+}
+
+// stripOptional returns the schema without any property its object does not require — the
+// schema as the first release published it.
+func stripOptional(s map[string]any) map[string]any {
+	out := map[string]any{}
+	for k, v := range s {
+		out[k] = v
+	}
+	if props, ok := s["properties"].(map[string]any); ok {
+		required := map[string]bool{}
+		for _, r := range s["required"].([]any) {
+			required[r.(string)] = true
+		}
+		kept := map[string]any{}
+		for name, p := range props {
+			if required[name] {
+				kept[name] = stripOptional(p.(map[string]any))
+			}
+		}
+		out["properties"] = kept
+	}
+	if items, ok := s["items"].(map[string]any); ok {
+		out["items"] = stripOptional(items)
+	}
+	if ap, ok := s["additionalProperties"].(map[string]any); ok {
+		out["additionalProperties"] = stripOptional(ap)
+	}
+	return out
 }
 
 func lineDiff(want, got []string) string {

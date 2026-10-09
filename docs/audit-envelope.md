@@ -17,6 +17,11 @@ SERVICES_NS=tequila                                 # …and the services namesp
 Each line below gives the requirement, how the operator meets it, the commands to run, and the
 answer you should get. **Status** says whether the line is met at v0.1.0 or still pending.
 
+The same lines run as a checklist on every change, against the operator deployed into a kind
+cluster: [`test/e2e/run.sh`](../test/e2e/run.sh), part 2 — one `[ ok ]` or `[FAIL]` line per
+check. Its commands are the ones below; `OPERATOR_NS`, `PLATFORM_NS`, `SERVICES_NS` and
+`FLUX_NS` point it at your estate.
+
 ---
 
 ## 1. RBAC is read-only on named kinds — met
@@ -44,6 +49,16 @@ done
   `tq-operator-observe-flux`;
 - in `default` and `kube-system`, nothing beyond what every authenticated identity has
   (`selfsubjectreviews`, the discovery endpoints).
+
+The e2e compares the `--list` answer of every namespace, rule for rule, with this list: in the
+estate namespaces `pods`, `deployments`, `replicasets`, `externalsecrets` (get, list, watch); in
+`flux-system` `kustomizations`, `gitrepositories`, `ocirepositories`, `fluxinstances` (get,
+list, watch); in `tq-operator` `estates` (get, list, watch), `estates/status` (get, update,
+patch) and `events` (create, patch); everywhere `nodes` (get, list, watch); and no non-resource
+verb but `get`. What every ServiceAccount of the cluster holds anyway — the `selfsubject*` reviews
+and whatever the Kubernetes version grants the `system:serviceaccounts` group by default (reading
+`clustertrustbundles` on recent versions) — is measured on a plain `default` ServiceAccount and
+subtracted first, so the comparison is the operator's own RBAC and nothing else.
 
 ## 2. No Secrets, no exec, no admission webhook — met
 
@@ -152,7 +167,19 @@ The schema has no place for any of these, so a report never carries them:
 - anything from a Secret or a ConfigMap.
 
 When `operator.report.ownServices` is `false` in `tequila.yaml`, your own services are left out
-of `running`, `drift` and the crash-loop names entirely.
+of `running`, `drift` and the crash-loop names entirely. A workload running a platform image that
+your `tequila.yaml` does not declare is not one of your own services: it stays in the report,
+flagged `undeclared`, with one `Undeclared` drift naming its image.
+
+Two more facts the report carries about a workload, and what it never carries with them:
+
+- `state: attached` says a developer's inner loop runs a checkout over the workload — the Flux
+  Kustomization is suspended and annotated. The operator reads the annotation's presence; the
+  value (who attached, from where, since when) is dropped before the object enters its cache and
+  cannot appear in the status or the report.
+- `crashLooping` and `restarts` come from the Pods' container statuses — the waiting reason, the
+  terminated state's exit code and reason, and the restart counts; never a log line, never a
+  termination message, never a Pod name.
 
 ## 6. Supply chain and runtime posture — partly met
 
@@ -205,7 +232,14 @@ The operator is yours to switch off and to unbind, from your own repository and 
 ## 8. Failure mode: nothing breaks — met
 
 ```bash
+snapshot() {   # every Deployment outside the operator's namespace, every Kustomization, every Estate — spec and metadata
+  kubectl get deployments -A -o json | jq -c '[.items[] | select(.metadata.namespace != "tq-operator") | {ns: .metadata.namespace, name: .metadata.name, generation: .metadata.generation, spec}]'
+  kubectl get kustomizations -A -o json | jq -c '[.items[] | {ns: .metadata.namespace, name: .metadata.name, generation: .metadata.generation, annotations: .metadata.annotations, spec}]'
+  kubectl get estates -A -o json | jq -c '[.items[] | {ns: .metadata.namespace, name: .metadata.name, generation: .metadata.generation, finalizers: .metadata.finalizers, spec}]'
+}
+before=$(snapshot)
 kubectl -n tq-operator scale deploy tq-operator --replicas=0      # your workloads are untouched
+sleep 15; after=$(snapshot); [ "$before" = "$after" ] && echo identical
 kubectl get estate -A -o jsonpath='{range .items[*]}{.metadata.name}{" finalizers="}{.metadata.finalizers}{"\n"}{end}'   # none
 kubectl get validatingwebhookconfigurations,mutatingwebhookconfigurations   # none of the operator's
 kubectl get estate -A -o json | jq '[.items[].status | has("observedGeneration") or any(.conditions[]?; .type == "Ready")] | any'   # false

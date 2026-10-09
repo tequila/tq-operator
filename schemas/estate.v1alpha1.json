@@ -232,6 +232,10 @@
                       "null"
                     ]
                   },
+                  "attached": {
+                    "description": "Attached is true when the Kustomization is suspended AND carries the attachment\nannotation (tequila.dev/attached-by) a developer's inner loop writes when it runs a local\ncheckout over the rendered workloads. The workloads it applies report state attached,\nand neither they nor the Kustomization are drift. Only the annotation's presence is\nread; who attached is never held or reported.",
+                    "type": "boolean"
+                  },
                   "lastReconcile": {
                     "description": "LastReconcile is the Ready condition's last transition.",
                     "format": "date-time",
@@ -249,6 +253,10 @@
                   "reason": {
                     "description": "Reason is the Ready condition's reason — Flux's own word, never its message.",
                     "type": "string"
+                  },
+                  "suspended": {
+                    "description": "Suspended is spec.suspend: Flux applies nothing from it until it is resumed.",
+                    "type": "boolean"
                   }
                 },
                 "required": [
@@ -632,6 +640,10 @@
                 "additionalProperties": false,
                 "description": "Workload is one Deployment of the two estate namespaces.",
                 "properties": {
+                  "crashLooping": {
+                    "description": "CrashLooping is true while a container of one of the workload's Pods waits in\nCrashLoopBackOff, or lies terminated with at least one restart behind it in a Pod that is\nstill running (the kubelet will start it again).",
+                    "type": "boolean"
+                  },
                   "images": {
                     "items": {
                       "additionalProperties": false,
@@ -699,12 +711,29 @@
                     ],
                     "type": "object"
                   },
+                  "restarts": {
+                    "description": "Restarts is the sum of the container restart counts over the workload's current Pods.",
+                    "format": "int32",
+                    "type": "integer"
+                  },
                   "service": {
                     "description": "Service is the registered service the workload belongs to; null for the estate's own\nworkloads and for a tenant's own services.",
                     "type": [
                       "string",
                       "null"
                     ]
+                  },
+                  "state": {
+                    "description": "State is managed, or attached while a developer's inner loop runs a checkout over it.",
+                    "enum": [
+                      "managed",
+                      "attached"
+                    ],
+                    "type": "string"
+                  },
+                  "undeclared": {
+                    "description": "Undeclared is true for a services-namespace workload whose image is a platform image\n(its repository path is platform/<name>) and whose service spec.services does not list\n— such a workload is also an Undeclared drift. Never true in the platform namespace.",
+                    "type": "boolean"
                   }
                 },
                 "required": [

@@ -96,11 +96,12 @@ func Marshal(schema map[string]any) ([]byte, error) {
 }
 
 // Shape lists a schema one line per path — "<json pointer> <type>[ <annotation>…]" — so two
-// schemas can be compared by structure alone (descriptions are not shape).
+// schemas can be compared by structure alone (descriptions are not shape). A property its
+// parent does not require carries the annotation "optional".
 func Shape(schema map[string]any) []string {
 	var lines []string
-	var walk func(path string, s map[string]any)
-	walk = func(path string, s map[string]any) {
+	var walk func(path string, s map[string]any, optional bool)
+	walk = func(path string, s map[string]any, optional bool) {
 		line := path
 		if line == "" {
 			line = "/"
@@ -126,25 +127,34 @@ func Shape(schema map[string]any) []string {
 		if v, ok := s["maxItems"]; ok {
 			line += fmt.Sprintf(" maxItems=%v", v)
 		}
+		if optional {
+			line += " optional"
+		}
 		lines = append(lines, line)
 		if props, ok := s["properties"].(map[string]any); ok {
+			required := map[string]bool{}
+			if req, ok := s["required"].([]any); ok {
+				for _, r := range req {
+					required[fmt.Sprint(r)] = true
+				}
+			}
 			names := make([]string, 0, len(props))
 			for name := range props {
 				names = append(names, name)
 			}
 			sort.Strings(names)
 			for _, name := range names {
-				walk(path+"/"+name, props[name].(map[string]any))
+				walk(path+"/"+name, props[name].(map[string]any), !required[name])
 			}
 		}
 		if items, ok := s["items"].(map[string]any); ok {
-			walk(path+"/[]", items)
+			walk(path+"/[]", items, false)
 		}
 		if ap, ok := s["additionalProperties"].(map[string]any); ok {
-			walk(path+"/{}", ap)
+			walk(path+"/{}", ap, false)
 		}
 	}
-	walk("", schema)
+	walk("", schema, false)
 	return lines
 }
 

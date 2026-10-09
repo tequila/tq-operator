@@ -21,6 +21,15 @@ const (
 	// rendered it; the most common value in the platform namespace is running.estate.
 	LabelOperationsK8s = "estate.tequila.dev/operations-k8s"
 	AnnotationApp      = "klass8s.dev/app"
+	// LabelFluxName and LabelFluxNamespace are the labels Flux's kustomize-controller stamps on
+	// every object it applies: the Kustomization's name and namespace. They tie a Deployment to
+	// the Kustomization that applies it.
+	LabelFluxName      = "kustomize.toolkit.fluxcd.io/name"
+	LabelFluxNamespace = "kustomize.toolkit.fluxcd.io/namespace"
+	// AnnotationAttachedBy marks a Kustomization a developer's inner loop suspended to run a
+	// local checkout over its workloads. Only its presence is read — the value, who attached, is
+	// dropped before the object enters the cache.
+	AnnotationAttachedBy = "tequila.dev/attached-by"
 )
 
 func keptMeta(m metav1.ObjectMeta, labels []string, annotations []string) metav1.ObjectMeta {
@@ -54,7 +63,8 @@ func pick(in map[string]string, names []string) map[string]string {
 }
 
 // TransformPod keeps a Pod's labels (for selector matching), owner references, container
-// images, phase and per-container image ID, readiness, restart count and waiting reason.
+// images, phase and per-container image ID, readiness, restart count, waiting reason and the
+// terminated state's exit code and reason — never a message.
 func TransformPod(obj any) (any, error) {
 	pod, ok := obj.(*corev1.Pod)
 	if !ok {
@@ -70,6 +80,9 @@ func TransformPod(obj any) (any, error) {
 		kept := corev1.ContainerStatus{Name: cs.Name, ImageID: cs.ImageID, Ready: cs.Ready, RestartCount: cs.RestartCount}
 		if cs.State.Waiting != nil {
 			kept.State.Waiting = &corev1.ContainerStateWaiting{Reason: cs.State.Waiting.Reason}
+		}
+		if cs.State.Terminated != nil {
+			kept.State.Terminated = &corev1.ContainerStateTerminated{ExitCode: cs.State.Terminated.ExitCode, Reason: cs.State.Terminated.Reason}
 		}
 		out.Status.ContainerStatuses = append(out.Status.ContainerStatuses, kept)
 	}
@@ -97,16 +110,16 @@ func TransformNode(obj any) (any, error) {
 	return out, nil
 }
 
-// TransformDeployment keeps a Deployment's attribution labels, the render's app annotation, the
-// selector, the replica counts and each container's name and image — never the pod
-// template's env, volumes or anything else of it.
+// TransformDeployment keeps a Deployment's attribution labels, Flux's two labels, the render's
+// app annotation, the selector, the replica counts and each container's name and image — never
+// the pod template's env, volumes or anything else of it.
 func TransformDeployment(obj any) (any, error) {
 	d, ok := obj.(*appsv1.Deployment)
 	if !ok {
 		return obj, nil
 	}
 	out := &appsv1.Deployment{ObjectMeta: keptMeta(d.ObjectMeta,
-		[]string{LabelName, LabelComponent, LabelOperationsK8s}, []string{AnnotationApp})}
+		[]string{LabelName, LabelComponent, LabelOperationsK8s, LabelFluxName, LabelFluxNamespace}, []string{AnnotationApp})}
 	out.Spec.Replicas = d.Spec.Replicas
 	out.Spec.Selector = d.Spec.Selector
 	for _, c := range d.Spec.Template.Spec.Containers {
@@ -128,11 +141,23 @@ func TransformExternalSecret(obj any) (any, error) {
 }
 
 // TransformKustomization keeps a Kustomization's source reference, suspension, last applied
-// revision and its conditions (type, status, reason, last transition) — never a message.
+// revision, its conditions (type, status, reason, last transition — never a message) and
+// whether the attachment annotation is present (its value is dropped).
 func TransformKustomization(obj any) (any, error) {
-	return transformUnstructured(obj, [][]string{
+	out, err := transformUnstructured(obj, [][]string{
 		{"spec", "sourceRef"}, {"spec", "suspend"}, {"status", "lastAppliedRevision"},
 	}, true)
+	if err != nil {
+		return nil, err
+	}
+	in, ok := obj.(*unstructured.Unstructured)
+	if !ok {
+		return out, nil
+	}
+	if _, present := in.GetAnnotations()[AnnotationAttachedBy]; present {
+		out.(*unstructured.Unstructured).SetAnnotations(map[string]string{AnnotationAttachedBy: ""})
+	}
+	return out, nil
 }
 
 // TransformSource keeps a GitRepository's or OCIRepository's artifact revision and conditions.

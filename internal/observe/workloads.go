@@ -3,6 +3,7 @@ package observe
 import (
 	"context"
 	"errors"
+	"math"
 	"sort"
 	"strings"
 
@@ -21,9 +22,16 @@ type Workload struct {
 	// attribution hints the render stamps.
 	NameLabel string
 	App       string
-	Desired   int32
-	Ready     int32
-	Images    []Image
+	// Kustomization is the Flux Kustomization that applied the Deployment, from Flux's own
+	// labels — "" when the labels are absent or name another namespace than Flux's.
+	Kustomization string
+	Desired       int32
+	Ready         int32
+	Images        []Image
+	// CrashLooping is true while a container of one of the Deployment's Pods waits in
+	// CrashLoopBackOff; Restarts sums the container restart counts over those Pods.
+	CrashLooping bool
+	Restarts     int32
 }
 
 // Image is a container image of a workload: the template's reference and the digest a Pod
@@ -70,6 +78,9 @@ func (o *Observer) observeWorkloads(ctx context.Context, scope Scope) ([]Workloa
 					Desired:   1,
 					Ready:     d.Status.ReadyReplicas,
 				}}
+				if d.Labels[LabelFluxNamespace] == o.FluxNamespace {
+					e.w.Kustomization = d.Labels[LabelFluxName]
+				}
 				if d.Spec.Replicas != nil {
 					e.w.Desired = *d.Spec.Replicas
 				}
@@ -122,10 +133,12 @@ func (o *Observer) observeWorkloads(ctx context.Context, scope Scope) ([]Workloa
 				}
 				if owner != nil {
 					recordDigests(owner, pod)
+					owner.Restarts = int32(min(int64(owner.Restarts)+int64(restarts(pod)), math.MaxInt32)) //nolint:gosec // clamped on this line
 				}
 				if crashLooping(pod) {
 					switch {
 					case owner != nil:
+						owner.CrashLooping = true
 						crash[owner.Namespace+"/"+owner.Name] = true
 					case len(pod.OwnerReferences) > 0:
 						crash[pod.Namespace+"/"+pod.OwnerReferences[0].Name] = true
@@ -194,9 +207,26 @@ func DigestOf(imageID string) string {
 	return ""
 }
 
+// restarts sums a Pod's container restart counts, saturating at the int32 maximum.
+func restarts(pod *corev1.Pod) int32 {
+	var total int64
+	for _, cs := range pod.Status.ContainerStatuses {
+		total += int64(cs.RestartCount)
+	}
+	return int32(min(total, math.MaxInt32)) //nolint:gosec // clamped on this line
+}
+
+// crashLooping reports whether a container of the Pod is in a crash loop: it waits in
+// CrashLoopBackOff, or it lies terminated with at least one restart behind it while the Pod is
+// still Running — the kubelet will start it again. The second shape matters because a kubelet
+// may report the terminated state for the whole back-off and the waiting reason only briefly, or
+// not at all (observed on Kubernetes 1.37).
 func crashLooping(pod *corev1.Pod) bool {
 	for _, cs := range pod.Status.ContainerStatuses {
 		if cs.State.Waiting != nil && cs.State.Waiting.Reason == "CrashLoopBackOff" {
+			return true
+		}
+		if cs.State.Terminated != nil && cs.RestartCount > 0 && pod.Status.Phase == corev1.PodRunning {
 			return true
 		}
 	}
