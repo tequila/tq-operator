@@ -55,7 +55,10 @@ estate namespaces `pods`, `deployments`, `replicasets`, `externalsecrets` (get, 
 `flux-system` `kustomizations`, `gitrepositories`, `ocirepositories`, `fluxinstances` (get,
 list, watch); in `tq-operator` `estates` (get, list, watch), `estates/status` (get, update,
 patch) and `events` (create, patch); everywhere `nodes` (get, list, watch); and no non-resource
-verb but `get`.
+verb but `get`. What every ServiceAccount of the cluster holds anyway — the `selfsubject*` reviews
+and whatever the Kubernetes version grants the `system:serviceaccounts` group by default (reading
+`clustertrustbundles` on recent versions) — is measured on a plain `default` ServiceAccount and
+subtracted first, so the comparison is the operator's own RBAC and nothing else.
 
 ## 2. No Secrets, no exec, no admission webhook — met
 
