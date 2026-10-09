@@ -69,8 +69,10 @@ can_do() { [ "$(can "$@")" = yes ]; }
 # rules <namespace> — every "<group>/<resource>:<verb>" the operator's identity holds there, as
 # the API server answers a SelfSubjectRulesReview (what `kubectl auth can-i --list` shows); the
 # grants every authenticated identity has (the selfsubject* reviews) removed. Sorted.
+# --validate=false: kubectl's client-side validation lists CRDs, which the impersonated identity
+# may not — the review is a built-in kind and the API server validates it anyway.
 rules_review() {
-    kubectl --as="$SA" create -o json -f - <<EOF
+    kubectl --as="$SA" create --validate=false -o json -f - <<EOF
 {"apiVersion":"authorization.k8s.io/v1","kind":"SelfSubjectRulesReview","spec":{"namespace":"$1"}}
 EOF
 }
