@@ -1,0 +1,5 @@
+resources:
+  - namespace.yaml
+  - signing_keys.yaml
+  - manager.yaml
+  - network_policy.yaml

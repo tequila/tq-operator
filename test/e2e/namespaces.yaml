@@ -1,0 +1,12 @@
+# The estate's namespaces the Roles of rung observe bind in.
+apiVersion: v1
+kind: Namespace
+metadata: { name: operations }
+---
+apiVersion: v1
+kind: Namespace
+metadata: { name: tequila }
+---
+apiVersion: v1
+kind: Namespace
+metadata: { name: flux-system }

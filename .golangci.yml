@@ -1,0 +1,39 @@
+version: "2"
+run:
+  timeout: 5m
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - errorlint
+    - gosec
+    - misspell
+    - noctx
+    - revive
+    - unconvert
+    - unparam
+  settings:
+    gosec:
+      excludes:
+        - G304 # reading the configured token and signing-keys files is the point
+    revive:
+      rules:
+        - name: exported
+          disabled: true
+  exclusions:
+    generated: lax
+    rules:
+      - path: _test\.go
+        linters: [gosec, noctx, bodyclose, unparam]
+      # hack/ writes repository files, world-readable like every file of a checkout.
+      - path: ^hack/
+        linters: [gosec]
+        text: "G30[16]"
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/tequila/tq-operator

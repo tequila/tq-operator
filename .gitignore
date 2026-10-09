@@ -1,0 +1,8 @@
+# setup-envtest's API server and etcd, and local builds.
+/bin/
+# The release binaries and assets (make dist).
+/dist/
+# Go test and coverage output.
+*.test
+*.out
+cover.html

@@ -1,0 +1,126 @@
+package observe
+
+import (
+	"strings"
+	"testing"
+
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"sigs.k8s.io/yaml"
+)
+
+func TestDetectPlatform(t *testing.T) {
+	cases := []struct {
+		server   string
+		kubelets []string
+		provider []string
+		want     string
+	}{
+		{"v1.35.1-eks-3cfe0ce", nil, nil, "eks"},
+		{"v1.35.1", []string{"v1.35.1-eks-113cf36"}, nil, "eks"},
+		{"v1.35.1+k3s1", nil, nil, "k3s"},
+		{"v1.35.1", nil, []string{"digitalocean://123"}, "doks"},
+		{"v1.35.1", nil, []string{"aws:///eu-central-1a/i-0abc"}, "eks"},
+		{"v1.35.1", nil, []string{"kind://docker/kind/kind-control-plane"}, "generic"},
+		{"", nil, nil, "generic"},
+	}
+	for _, c := range cases {
+		if got := DetectPlatform(c.server, c.kubelets, c.provider); got != c.want {
+			t.Errorf("%+v: %s", c, got)
+		}
+	}
+}
+
+func TestDigestOf(t *testing.T) {
+	d := "sha256:" + strings.Repeat("a", 64)
+	for in, want := range map[string]string{
+		"docker-pullable://registry.tequila.dev/platform/iam-api@" + d: d,
+		"registry.tequila.dev/platform/iam-api@" + d:                   d,
+		d:                   d,
+		"":                  "",
+		"sha256:short":      "",
+		"docker://" + d[7:]: "",
+	} {
+		if got := DigestOf(in); got != want {
+			t.Errorf("DigestOf(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// The transforms keep what the readers need and drop everything else — above all the
+// environment, the volumes and any Secret reference a Pod or Deployment carries.
+func TestTransformsDropWhatIsNeverRead(t *testing.T) {
+	replicas := int32(2)
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "iam-api-abc", Namespace: "tequila", Labels: map[string]string{"app.kubernetes.io/name": "iam"},
+			Annotations: map[string]string{"secret-annotation": "x"}},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app", Image: "img:v1",
+			Env:     []corev1.EnvVar{{Name: "DB_PASSWORD", Value: "hunter2"}},
+			Command: []string{"php", "--token=s3cr3t"}}},
+			Volumes: []corev1.Volume{{Name: "jwt", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "iam-jwt"}}}}},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning, Message: "pod message", ContainerStatuses: []corev1.ContainerStatus{{
+			Name: "app", ImageID: "img@sha256:x", Ready: true,
+			State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff", Message: "log line"}}}}},
+	}
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "iam-api", Namespace: "tequila",
+			Labels:      map[string]string{"app.kubernetes.io/name": "iam", "team-secret-label": "x"},
+			Annotations: map[string]string{"klass8s.dev/app": "iam", "kubectl.kubernetes.io/last-applied-configuration": "{…}"}},
+		Spec: appsv1.DeploymentSpec{Replicas: &replicas, Template: corev1.PodTemplateSpec{Spec: *pod.Spec.DeepCopy()}},
+	}
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "ip-10-0-0-1", Labels: map[string]string{"topology": "x"}},
+		Spec:       corev1.NodeSpec{ProviderID: "aws:///i-1"},
+		Status: corev1.NodeStatus{
+			NodeInfo:  corev1.NodeSystemInfo{Architecture: "arm64", KubeletVersion: "v1.35.1", MachineID: "machine-id-value", BootID: "boot-id-value"},
+			Addresses: []corev1.NodeAddress{{Type: corev1.NodeInternalIP, Address: "10.0.0.1"}},
+			Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue,
+				LastHeartbeatTime: metav1.Now(), Message: "kubelet is posting ready status"}},
+		},
+	}
+	es := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "external-secrets.io/v1", "kind": "ExternalSecret",
+		"metadata": map[string]any{"name": "iam-app", "namespace": "tequila", "annotations": map[string]any{"a": "b"}},
+		"spec":     map[string]any{"data": []any{map[string]any{"remoteRef": map[string]any{"key": "prod/iam/REMOTE_KEY"}}}},
+		"status": map[string]any{"binding": map[string]any{"name": "iam-app"}, "conditions": []any{map[string]any{
+			"type": "Ready", "status": "False", "reason": "SecretSyncedError", "message": "could not read REMOTE_KEY"}}},
+	}}
+	k := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": "Kustomization",
+		"metadata": map[string]any{"name": "services-iam", "namespace": "flux-system"},
+		"spec": map[string]any{"path": "./services/iam/prod", "postBuild": map[string]any{"substitute": map[string]any{"X": "y"}},
+			"sourceRef": map[string]any{"kind": "GitRepository", "name": "flux-system"}},
+		"status": map[string]any{"lastAppliedRevision": "main@sha1:a", "inventory": map[string]any{"entries": []any{"x"}},
+			"conditions": []any{map[string]any{"type": "Ready", "status": "True", "reason": "ReconciliationSucceeded",
+				"message": "Applied revision", "lastTransitionTime": "2026-10-05T13:00:00Z"}}},
+	}}
+
+	var dump strings.Builder
+	for _, tc := range []struct {
+		obj any
+		fn  func(any) (any, error)
+	}{{pod, TransformPod}, {dep, TransformDeployment}, {node, TransformNode}, {es, TransformExternalSecret}, {k, TransformKustomization}} {
+		out, err := tc.fn(tc.obj)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, _ := yaml.Marshal(out)
+		dump.Write(raw)
+	}
+	kept := dump.String()
+	for _, never := range []string{"hunter2", "DB_PASSWORD", "s3cr3t", "iam-jwt", "secret-annotation", "pod message", "log line",
+		"team-secret-label", "last-applied", "10.0.0.1", "machine-id-value", "boot-id-value", "kubelet is posting", "REMOTE_KEY",
+		"binding", "postBuild", "inventory", "Applied revision", "lastHeartbeatTime: \"2"} {
+		if strings.Contains(kept, never) {
+			t.Errorf("a transform kept %q", never)
+		}
+	}
+	for _, needed := range []string{"img:v1", "img@sha256:x", "CrashLoopBackOff", "klass8s.dev/app: iam", "arm64", "v1.35.1",
+		"aws:///i-1", "SecretSyncedError", "main@sha1:a", "ReconciliationSucceeded", "2026-10-05T13:00:00Z", "flux-system"} {
+		if !strings.Contains(kept, needed) {
+			t.Errorf("a transform dropped %q", needed)
+		}
+	}
+}

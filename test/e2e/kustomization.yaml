@@ -1,0 +1,35 @@
+# The e2e overlay of config/default: the image kind loaded, a one-minute interval, IAM and the
+# console at .invalid hosts (RFC 2606 — they never resolve, so every report is Unreachable),
+# and no NetworkPolicy (kindnet may enforce egress to the API server, which the base policy
+# leaves to the render on such CNIs; the envelope's network line is not exercised here).
+resources:
+  - ../../config/default
+images:
+  - name: registry.tequila.dev/platform/tq-operator
+    newName: tq-operator
+    newTag: e2e
+patches:
+  - patch: |-
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: tq-operator
+        namespace: tq-operator
+      $patch: delete
+  - target: { kind: Deployment, name: tq-operator }
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/args
+        value:
+          - --interval=1m
+          - --iam-url=https://iam.invalid
+          - --console-url=https://console.invalid
+          - --allow-any-host
+          - --iam-token-file=/var/run/tequila/iam/token
+          - --signing-keys=/etc/tq-operator/signing-keys.json
+      - op: replace
+        path: /spec/template/spec/volumes/0/projected/sources/0/serviceAccountToken/audience
+        value: https://iam.invalid
+      - op: replace
+        path: /spec/template/spec/containers/0/env/1/value
+        value: tq-operator:e2e

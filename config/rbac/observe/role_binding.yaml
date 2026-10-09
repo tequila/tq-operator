@@ -1,0 +1,45 @@
+# One binding per Role of rung observe (role.yaml, generated from the markers), all to the
+# operator's ServiceAccount and nothing else.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: tq-operator-observe-cluster
+  labels: { app.kubernetes.io/name: tq-operator, app.kubernetes.io/part-of: tequila }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: tq-operator-observe-cluster }
+subjects: [ { kind: ServiceAccount, name: tq-operator, namespace: tq-operator } ]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tq-operator-self
+  namespace: tq-operator
+  labels: { app.kubernetes.io/name: tq-operator, app.kubernetes.io/part-of: tequila }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: tq-operator-self }
+subjects: [ { kind: ServiceAccount, name: tq-operator, namespace: tq-operator } ]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tq-operator-observe
+  namespace: operations
+  labels: { app.kubernetes.io/name: tq-operator, app.kubernetes.io/part-of: tequila }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: tq-operator-observe }
+subjects: [ { kind: ServiceAccount, name: tq-operator, namespace: tq-operator } ]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tq-operator-observe
+  namespace: tequila
+  labels: { app.kubernetes.io/name: tq-operator, app.kubernetes.io/part-of: tequila }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: tq-operator-observe }
+subjects: [ { kind: ServiceAccount, name: tq-operator, namespace: tq-operator } ]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tq-operator-observe-flux
+  namespace: flux-system
+  labels: { app.kubernetes.io/name: tq-operator, app.kubernetes.io/part-of: tequila }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: tq-operator-observe-flux }
+subjects: [ { kind: ServiceAccount, name: tq-operator, namespace: tq-operator } ]

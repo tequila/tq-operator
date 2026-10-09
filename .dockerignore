@@ -1,0 +1,4 @@
+# Only the binaries `make dist` builds: the Dockerfile copies one of them.
+*
+!dist/tq-operator-linux-amd64
+!dist/tq-operator-linux-arm64

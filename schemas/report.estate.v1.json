@@ -1,0 +1,631 @@
+{
+  "$id": "https://docs.tequila.dev/schemas/report.estate.v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The estate report tq-operator sends to the console: Estate.status plus the declared echo and the operator's identity. Every key is required; an absent value is null.",
+  "properties": {
+    "applied": {
+      "additionalProperties": false,
+      "description": "Applied is what Flux applied; null where no Flux source is observed.",
+      "properties": {
+        "kustomizations": {
+          "items": {
+            "additionalProperties": false,
+            "description": "KustomizationStatus is one Flux Kustomization.",
+            "properties": {
+              "appliedRevision": {
+                "maxLength": 512,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "lastReconcile": {
+                "description": "LastReconcile is the Ready condition's last transition.",
+                "format": "date-time",
+                "maxLength": 512,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "maxLength": 512,
+                "type": "string"
+              },
+              "ready": {
+                "type": "boolean"
+              },
+              "reason": {
+                "description": "Reason is the Ready condition's reason — Flux's own word, never its message.",
+                "maxLength": 512,
+                "type": "string"
+              }
+            },
+            "required": [
+              "appliedRevision",
+              "lastReconcile",
+              "name",
+              "ready",
+              "reason"
+            ],
+            "type": "object"
+          },
+          "maxItems": 200,
+          "type": "array"
+        },
+        "source": {
+          "additionalProperties": false,
+          "description": "AppliedSource is the Flux source the Kustomizations apply from.",
+          "properties": {
+            "kind": {
+              "enum": [
+                "GitRepository",
+                "OCIRepository"
+              ],
+              "maxLength": 512,
+              "type": "string"
+            },
+            "name": {
+              "maxLength": 512,
+              "type": "string"
+            },
+            "revision": {
+              "description": "Revision is the source's artifact revision; null before the first artifact.",
+              "maxLength": 512,
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "name",
+            "revision"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "kustomizations",
+        "source"
+      ],
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "cluster": {
+      "additionalProperties": false,
+      "description": "Cluster is what the cluster says of itself.",
+      "properties": {
+        "kubernetes": {
+          "description": "Kubernetes is the API server's version.",
+          "maxLength": 512,
+          "type": "string"
+        },
+        "nodes": {
+          "additionalProperties": false,
+          "description": "NodesStatus counts the nodes; it never names one.",
+          "properties": {
+            "architectures": {
+              "items": {
+                "maxLength": 512,
+                "type": "string"
+              },
+              "maxItems": 8,
+              "type": "array"
+            },
+            "count": {
+              "type": "integer"
+            },
+            "kubeletVersions": {
+              "items": {
+                "maxLength": 512,
+                "type": "string"
+              },
+              "maxItems": 32,
+              "type": "array"
+            }
+          },
+          "required": [
+            "architectures",
+            "count",
+            "kubeletVersions"
+          ],
+          "type": "object"
+        },
+        "platform": {
+          "enum": [
+            "eks",
+            "k3s",
+            "doks",
+            "generic"
+          ],
+          "maxLength": 512,
+          "type": "string"
+        }
+      },
+      "required": [
+        "kubernetes",
+        "nodes",
+        "platform"
+      ],
+      "type": "object"
+    },
+    "declared": {
+      "additionalProperties": false,
+      "description": "Declared echoes Estate.spec; null when no Estate is declared.",
+      "properties": {
+        "generation": {
+          "description": "Generation is the Estate's metadata.generation.",
+          "type": "integer"
+        },
+        "platform": {
+          "additionalProperties": {
+            "maxLength": 512,
+            "type": "string"
+          },
+          "description": "Platform is every other platform pin.",
+          "type": "object"
+        },
+        "renderer": {
+          "additionalProperties": false,
+          "description": "Renderer is the renderer pins; null where tequila.yaml pins none.",
+          "properties": {
+            "klass8s-cli": {
+              "maxLength": 512,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "manifests-core": {
+              "maxLength": 512,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "tq-cli": {
+              "maxLength": 512,
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "klass8s-cli",
+            "manifests-core",
+            "tq-cli"
+          ],
+          "type": "object"
+        },
+        "services": {
+          "additionalProperties": {
+            "additionalProperties": false,
+            "description": "DeclaredService is one entry of spec.services.",
+            "properties": {
+              "own": {
+                "type": "boolean"
+              },
+              "repo": {
+                "maxLength": 512,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "version": {
+                "maxLength": 512,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "own",
+              "repo",
+              "version"
+            ],
+            "type": "object"
+          },
+          "description": "Services is every registered service of the environment.",
+          "type": "object"
+        },
+        "source": {
+          "additionalProperties": false,
+          "description": "Source names the render's repository.",
+          "properties": {
+            "repository": {
+              "maxLength": 512,
+              "type": "string"
+            }
+          },
+          "required": [
+            "repository"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "generation",
+        "platform",
+        "renderer",
+        "services",
+        "source"
+      ],
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "drift": {
+      "description": "Drift is every difference between declared and observed state.",
+      "items": {
+        "additionalProperties": false,
+        "description": "Drift is one difference between declared and observed state.",
+        "properties": {
+          "declared": {
+            "maxLength": 512,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "enum": [
+              "RunningBehind",
+              "AppliedBehind",
+              "NotReady",
+              "SecretNotResolvable",
+              "Undeclared",
+              "NoEstate"
+            ],
+            "maxLength": 512,
+            "type": "string"
+          },
+          "observed": {
+            "maxLength": 512,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "subject": {
+            "description": "Subject is <namespace>/<workload>, a Kustomization's name or an object's <namespace>/<name>.",
+            "maxLength": 512,
+            "type": "string"
+          }
+        },
+        "required": [
+          "declared",
+          "kind",
+          "observed",
+          "subject"
+        ],
+        "type": "object"
+      },
+      "maxItems": 200,
+      "type": "array"
+    },
+    "estate": {
+      "additionalProperties": false,
+      "description": "Estate is who reports: the identity's account and environment, and the declared product.",
+      "properties": {
+        "account": {
+          "description": "Account is the organisation's slug, from the estate identity (sub estate:<account>/<env>).",
+          "maxLength": 512,
+          "type": "string"
+        },
+        "environment": {
+          "description": "Environment is the environment, from the estate identity.",
+          "maxLength": 512,
+          "type": "string"
+        },
+        "product": {
+          "description": "Product is Estate.spec.product as <owner>/<slug>; null when no Estate is declared.",
+          "maxLength": 512,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "account",
+        "environment",
+        "product"
+      ],
+      "type": "object"
+    },
+    "externalSecrets": {
+      "additionalProperties": false,
+      "description": "ExternalSecrets counts the estate namespaces' ExternalSecrets.",
+      "properties": {
+        "notReady": {
+          "items": {
+            "additionalProperties": false,
+            "description": "NotReadyExternalSecret is an ExternalSecret whose Ready condition is not True.",
+            "properties": {
+              "name": {
+                "maxLength": 512,
+                "type": "string"
+              },
+              "namespace": {
+                "maxLength": 512,
+                "type": "string"
+              },
+              "reason": {
+                "maxLength": 512,
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "namespace",
+              "reason"
+            ],
+            "type": "object"
+          },
+          "maxItems": 100,
+          "type": "array"
+        },
+        "ready": {
+          "type": "integer"
+        },
+        "total": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "notReady",
+        "ready",
+        "total"
+      ],
+      "type": "object"
+    },
+    "health": {
+      "additionalProperties": false,
+      "description": "Health is the Pods' health in the estate namespaces.",
+      "properties": {
+        "pods": {
+          "additionalProperties": false,
+          "description": "PodHealth counts Pods by phase; crash-looping workloads are named <namespace>/<workload>.",
+          "properties": {
+            "crashLooping": {
+              "items": {
+                "maxLength": 512,
+                "type": "string"
+              },
+              "maxItems": 100,
+              "type": "array"
+            },
+            "failed": {
+              "type": "integer"
+            },
+            "pending": {
+              "type": "integer"
+            },
+            "running": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "crashLooping",
+            "failed",
+            "pending",
+            "running"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "pods"
+      ],
+      "type": "object"
+    },
+    "operator": {
+      "additionalProperties": false,
+      "description": "Operator is the reporting operator.",
+      "properties": {
+        "capabilities": {
+          "description": "Capabilities is the rungs this operator runs.",
+          "items": {
+            "enum": [
+              "observe",
+              "verify",
+              "gate",
+              "act"
+            ],
+            "maxLength": 512,
+            "type": "string"
+          },
+          "maxItems": 4,
+          "type": "array"
+        },
+        "image": {
+          "description": "Image is the operator's image reference, as the render set it.",
+          "maxLength": 512,
+          "type": "string"
+        },
+        "version": {
+          "description": "Version is the operator's release.",
+          "maxLength": 512,
+          "type": "string"
+        }
+      },
+      "required": [
+        "capabilities",
+        "image",
+        "version"
+      ],
+      "type": "object"
+    },
+    "preflight": {
+      "description": "Preflight is rung verify's; always empty at rung observe.",
+      "maxItems": 0,
+      "type": "array"
+    },
+    "reportedAt": {
+      "description": "ReportedAt is when the report was assembled (RFC 3339, UTC).",
+      "format": "date-time",
+      "maxLength": 512,
+      "type": "string"
+    },
+    "running": {
+      "additionalProperties": false,
+      "description": "Running is what the kubelet runs.",
+      "properties": {
+        "estate": {
+          "additionalProperties": false,
+          "description": "RunningEstate is the estate's own version, as stamped on its workloads.",
+          "properties": {
+            "operationsK8s": {
+              "maxLength": 512,
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "operationsK8s"
+          ],
+          "type": "object"
+        },
+        "truncated": {
+          "description": "Truncated is true when the estate had more workloads than the cap.",
+          "type": "boolean"
+        },
+        "workloads": {
+          "items": {
+            "additionalProperties": false,
+            "description": "Workload is one Deployment of the two estate namespaces.",
+            "properties": {
+              "images": {
+                "items": {
+                  "additionalProperties": false,
+                  "description": "Image is one container image of a workload.",
+                  "properties": {
+                    "digest": {
+                      "description": "Digest is what the kubelet pulled (containerStatuses[].imageID); null until a Pod runs it.",
+                      "maxLength": 512,
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "ref": {
+                      "maxLength": 512,
+                      "type": "string"
+                    },
+                    "signature": {
+                      "description": "Signature is unverified at rung observe.",
+                      "enum": [
+                        "unverified",
+                        "valid",
+                        "invalid",
+                        "unsigned"
+                      ],
+                      "maxLength": 512,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "digest",
+                    "ref",
+                    "signature"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 16,
+                "type": "array"
+              },
+              "kind": {
+                "enum": [
+                  "Deployment"
+                ],
+                "maxLength": 512,
+                "type": "string"
+              },
+              "name": {
+                "maxLength": 512,
+                "type": "string"
+              },
+              "namespace": {
+                "maxLength": 512,
+                "type": "string"
+              },
+              "replicas": {
+                "additionalProperties": false,
+                "description": "Replicas is a workload's desired and ready replica counts.",
+                "properties": {
+                  "desired": {
+                    "type": "integer"
+                  },
+                  "ready": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "desired",
+                  "ready"
+                ],
+                "type": "object"
+              },
+              "service": {
+                "description": "Service is the registered service the workload belongs to; null for the estate's own workloads and for a tenant's own services.",
+                "maxLength": 512,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "images",
+              "kind",
+              "name",
+              "namespace",
+              "replicas",
+              "service"
+            ],
+            "type": "object"
+          },
+          "maxItems": 500,
+          "type": "array"
+        }
+      },
+      "required": [
+        "estate",
+        "truncated",
+        "workloads"
+      ],
+      "type": "object"
+    },
+    "schema": {
+      "const": "tequila.dev/report/estate/v1",
+      "type": "string"
+    }
+  },
+  "required": [
+    "applied",
+    "cluster",
+    "declared",
+    "drift",
+    "estate",
+    "externalSecrets",
+    "health",
+    "operator",
+    "preflight",
+    "reportedAt",
+    "running",
+    "schema"
+  ],
+  "title": "tequila.dev/report/estate/v1",
+  "type": "object"
+}

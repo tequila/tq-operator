@@ -1,0 +1,103 @@
+name: 'CI'
+
+# vet · unit tests + the envtest suite · golangci-lint · generated artifacts are fresh ·
+# both architectures compile — and the kind e2e: the CRD, an Estate and a fake Deployment
+# in a real cluster, the operator reporting to a console that does not exist.
+#
+# A public repository: every job runs on a GitHub-hosted runner and never on a self-hosted
+# one, because a pull request from a fork runs these jobs with its own code.
+
+on:
+    pull_request:
+        branches: [ "main" ]
+    push:
+        branches: [ "main" ]
+
+permissions:
+    contents: read
+
+concurrency:
+    group: ${{ github.event_name == 'pull_request' && format('ci-pr-{0}', github.event.pull_request.number) || format('ci-ref-{0}', github.ref) }}
+    cancel-in-progress: true
+
+# Git transfers that stall fail instead of hanging: a transfer below 1000 B/s for 30 s is
+# aborted, so a stalled clone costs half a minute, not the job's whole timeout.
+env:
+    GIT_HTTP_LOW_SPEED_LIMIT: '1000'
+    GIT_HTTP_LOW_SPEED_TIME: '30'
+
+jobs:
+    checks:
+        name: Vet, test, lint, generated
+        runs-on: ubuntu-latest
+        timeout-minutes: 25
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v7
+              timeout-minutes: 5
+
+            - name: Go
+              uses: actions/setup-go@v7
+              timeout-minutes: 5
+              with:
+                  go-version-file: go.mod
+
+            - name: go vet
+              run: go vet ./...
+
+            # The CRD, the RBAC of rung observe, deepcopy and both schemas are generated from
+            # the Go types and the markers; a stale artifact fails here.
+            - name: Generated artifacts are fresh
+              run: |
+                  make manifests
+                  if ! git diff --exit-code || [ -n "$(git status --porcelain --untracked-files=all -- api config schemas)" ]; then
+                      echo "::error title=make manifests::the generated artifacts are stale — run \`make manifests\` and commit the result"
+                      git status --short
+                      exit 1
+                  fi
+
+            - name: Unit tests and the envtest suite
+              run: make test
+
+            - name: golangci-lint
+              uses: golangci/golangci-lint-action@v9
+              timeout-minutes: 10
+              with:
+                  version: v2.14.0
+
+            # The same target the release builds its binaries with (CGO_ENABLED=0, into ./dist).
+            - name: Both architectures compile (CGO_ENABLED=0)
+              run: |
+                  make dist
+                  du -h dist/tq-operator-linux-*
+
+    e2e:
+        name: kind e2e
+        needs: checks
+        # kind needs a Docker daemon that runs privileged containers, which a GitHub-hosted
+        # runner has.
+        runs-on: ubuntu-latest
+        timeout-minutes: 30
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v7
+              timeout-minutes: 5
+
+            - name: Go
+              uses: actions/setup-go@v7
+              timeout-minutes: 5
+              with:
+                  go-version-file: go.mod
+
+            - name: kind
+              uses: helm/kind-action@v1.15.0
+              timeout-minutes: 10
+              with:
+                  version: v0.33.0
+                  cluster_name: tq-operator-e2e
+
+            - name: The e2e
+              env:
+                  IMG: tq-operator:e2e
+                  KIND_CLUSTER: tq-operator-e2e
+              run: ./test/e2e/run.sh

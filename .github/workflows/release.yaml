@@ -1,0 +1,262 @@
+name: 'Release'
+
+# The release of a tag vX.Y.Z: the two static binaries, the image and the deployable assets.
+#
+#   build   linux/amd64 + linux/arm64 binaries (CGO_ENABLED=0, `make dist`) and the assets
+#   image   registry.tequila.dev/platform/tq-operator:vX.Y.Z — linux/amd64 + linux/arm64, the
+#           Dockerfile only copies the binaries, so one buildx build makes both legs with no
+#           emulation
+#   assets  attached to the GitHub Release once the image is pushed:
+#             estates.estate.tequila.dev.yaml   the Estate CRD
+#             estate.v1alpha1.json              the Estate's published schema
+#             report.estate.v1.json             the estate report's published schema
+#             rbac.observe.yaml                 the RBAC of rung observe, as the markers generate it
+#             tq-operator-linux-amd64, tq-operator-linux-arm64
+#             SHA256SUMS
+#
+# How it starts: release-pr.yaml calls it (workflow_call) in the same run in which release-please
+# created the tag and the Release. A tag or a Release created with the default GITHUB_TOKEN starts
+# no workflow of its own, so neither `push: tags` nor `release: published` would ever fire here.
+# workflow_dispatch with the tag re-runs a release by hand (the Release must exist).
+#
+# The registry credential is no stored secret: the image job requests its own GitHub OIDC token
+# (audience https://id.tequila.dev) and exchanges it at Tequila IAM (RFC 8693 token exchange, no
+# client credentials) for a token of audience `packages`, which is the registry's password for the
+# job's lifetime. IAM answers `invalid_grant` when this GitHub organisation is not linked at the
+# Tequila console — the job then fails, with nothing to fall back to.
+
+on:
+    workflow_call:
+        inputs:
+            tag:
+                description: 'The release tag, vX.Y.Z'
+                required: true
+                type: string
+    workflow_dispatch:
+        inputs:
+            tag:
+                description: 'The release tag, vX.Y.Z (its GitHub Release must exist)'
+                required: true
+                type: string
+
+permissions: {}
+
+# Git transfers that stall fail instead of hanging: a transfer below 1000 B/s for 30 s is
+# aborted, so a stalled clone costs half a minute, not the job's whole timeout.
+env:
+    GIT_HTTP_LOW_SPEED_LIMIT: '1000'
+    GIT_HTTP_LOW_SPEED_TIME: '30'
+    TAG: ${{ inputs.tag }}
+
+jobs:
+    build:
+        name: The binaries and the assets
+        runs-on: ubuntu-latest
+        timeout-minutes: 20
+        permissions:
+            contents: read
+        steps:
+            - name: The tag is a release tag
+              run: |
+                  set -euo pipefail
+                  if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+                      echo "::error title=release::'$TAG' is not a release tag vX.Y.Z"
+                      exit 1
+                  fi
+
+            - name: Checkout the tag
+              uses: actions/checkout@v7
+              timeout-minutes: 5
+              with:
+                  ref: refs/tags/${{ inputs.tag }}
+                  persist-credentials: false
+
+            # release-please bumps the version in the release PR; an image built from a tag whose
+            # code reports another version would lie in every report.
+            - name: The code reports the tag's version
+              run: |
+                  set -euo pipefail
+                  if ! grep -qF "const Version = \"${TAG#v}\"" internal/version/version.go; then
+                      echo "::error title=release::internal/version/version.go does not carry ${TAG#v}"
+                      exit 1
+                  fi
+
+            # The Go minor version go.mod names, at its latest patch.
+            - name: The Go version
+              id: go
+              run: |
+                  set -euo pipefail
+                  minor="$(sed -nE 's/^go ([0-9]+\.[0-9]+)(\.[0-9]+)?$/\1/p' go.mod)"
+                  [[ -n "$minor" ]] || { echo "::error title=release::no go directive in go.mod"; exit 1; }
+                  echo "version=${minor}.x" >> "$GITHUB_OUTPUT"
+
+            - name: Go
+              uses: actions/setup-go@v7
+              timeout-minutes: 5
+              with:
+                  go-version: ${{ steps.go.outputs.version }}
+                  check-latest: true
+                  # A release builds from the module proxy, never from a cache another run wrote.
+                  cache: false
+
+            - name: The binaries (CGO_ENABLED=0)
+              run: |
+                  set -euo pipefail
+                  go version
+                  make dist
+
+            - name: The assets
+              run: |
+                  set -euo pipefail
+                  cp config/crd/bases/estate.tequila.dev_estates.yaml dist/estates.estate.tequila.dev.yaml
+                  cp schemas/estate.v1alpha1.json schemas/report.estate.v1.json dist/
+                  cp config/rbac/observe/role.yaml dist/rbac.observe.yaml
+                  (cd dist && sha256sum -- * > SHA256SUMS && cat SHA256SUMS)
+
+            - name: Hand them to the next jobs
+              uses: actions/upload-artifact@v7
+              timeout-minutes: 5
+              with:
+                  name: release
+                  path: dist/
+                  if-no-files-found: error
+                  retention-days: 7
+
+    image:
+        name: The image
+        needs: build
+        runs-on: ubuntu-latest
+        timeout-minutes: 20
+        permissions:
+            contents: read
+            id-token: write
+        env:
+            REGISTRY: registry.tequila.dev
+            IMAGE: registry.tequila.dev/platform/tq-operator
+        steps:
+            - name: Checkout the tag (the Dockerfile)
+              uses: actions/checkout@v7
+              timeout-minutes: 5
+              with:
+                  ref: refs/tags/${{ inputs.tag }}
+                  persist-credentials: false
+
+            - name: The binaries
+              uses: actions/download-artifact@v8
+              timeout-minutes: 5
+              with:
+                  name: release
+                  path: dist/
+
+            # A container builder (the default docker driver builds one platform only), created
+            # here rather than by an action: this job holds id-token: write.
+            - name: Buildx
+              timeout-minutes: 5
+              run: |
+                  set -euo pipefail
+                  docker buildx create --name release --driver docker-container --use
+                  docker buildx inspect --bootstrap
+
+            # The job's own identity: its GitHub OIDC token, exchanged at Tequila IAM for a token
+            # of audience `packages`. Every secret stays in this step — in 0600 files and in
+            # builtins, never on a command line, never in an output — and is masked.
+            - name: Log in to the registry with this job's identity
+              timeout-minutes: 3
+              run: |
+                  set -euo pipefail
+                  umask 077
+                  work="$(mktemp -d)"
+                  trap 'rm -rf "$work"' EXIT
+                  bounded() { curl -sS --connect-timeout 10 --max-time 30 --retry 3 "$@"; }
+
+                  # 1. The job's OIDC token for audience https://id.tequila.dev.
+                  printf 'Authorization: bearer %s\n' "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" > "$work/oidc.header"
+                  bounded --fail -H @"$work/oidc.header" -o "$work/oidc.json" \
+                      "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https%3A%2F%2Fid.tequila.dev"
+                  oidc="$(jq -r '.value // empty' "$work/oidc.json")"
+                  if [[ ! "$oidc" =~ ^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$ ]]; then
+                      echo "::error title=registry::GitHub issued no OIDC token for this job"
+                      exit 1
+                  fi
+                  echo "::add-mask::$oidc"
+
+                  # 2. The exchange: no client credentials, the OIDC token is the subject. A JWT is
+                  #    base64url and dots, so it needs no form encoding.
+                  {
+                      printf 'grant_type=%s' 'urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange'
+                      printf '&subject_token_type=%s' 'urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Ajwt'
+                      printf '&subject_token=%s' "$oidc"
+                      printf '&audience=%s' 'packages'
+                  } > "$work/exchange.form"
+                  if ! status="$(bounded -o "$work/token.json" -w '%{http_code}' \
+                      -H 'Accept: application/json' \
+                      --data-binary @"$work/exchange.form" \
+                      https://id.tequila.dev/oauth/token)"; then
+                      echo "::error title=registry::id.tequila.dev did not answer the token exchange"
+                      exit 1
+                  fi
+                  error="$(jq -r '.error // empty' "$work/token.json" 2>/dev/null || true)"
+                  if [[ "$error" == invalid_grant ]]; then
+                      echo "::error title=registry::this organisation is not linked at the Tequila console"
+                      exit 1
+                  fi
+                  access_token="$(jq -r '.access_token // empty' "$work/token.json" 2>/dev/null || true)"
+                  if [[ "$status" != 200 || -z "$access_token" ]]; then
+                      echo "::error title=registry::the token exchange at id.tequila.dev answered HTTP ${status}${error:+ (${error})}"
+                      exit 1
+                  fi
+                  echo "::add-mask::$access_token"
+
+                  # 3. The token is the registry password for the job's lifetime.
+                  printf '%s' "$access_token" > "$work/password"
+                  docker login "$REGISTRY" --username tequila-token --password-stdin < "$work/password"
+
+            # No provenance or SBOM attestation: an unsigned one would claim what the signed-image
+            # catalogue has yet to deliver. The index carries the two platform manifests only.
+            - name: Build and push linux/amd64 + linux/arm64
+              timeout-minutes: 10
+              run: |
+                  set -euo pipefail
+                  docker buildx build \
+                      --platform linux/amd64,linux/arm64 \
+                      --provenance=false --sbom=false \
+                      --tag "${IMAGE}:${TAG}" \
+                      --push .
+                  docker buildx imagetools inspect "${IMAGE}:${TAG}"
+
+            - name: Log out of the registry
+              if: always()
+              run: docker logout "$REGISTRY" || true
+
+    assets:
+        name: The release assets
+        needs: [ build, image ]
+        runs-on: ubuntu-latest
+        timeout-minutes: 15
+        permissions:
+            contents: write
+        steps:
+            - name: The assets
+              uses: actions/download-artifact@v8
+              timeout-minutes: 5
+              with:
+                  name: release
+                  path: dist/
+
+            - name: Attach them to the release
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  GH_REPO: ${{ github.repository }}
+              run: |
+                  set -euo pipefail
+                  # Every call bounded and retried; an upload with --clobber is idempotent.
+                  for delay in 10 20 30 ''; do
+                      if timeout 60 gh release view "$TAG" >/dev/null && timeout 300 gh release upload "$TAG" dist/* --clobber; then
+                          exit 0
+                      fi
+                      [[ -n "$delay" ]] || break
+                      echo "attaching the assets to $TAG failed — retrying in ${delay} s"
+                      sleep "$delay"
+                  done
+                  echo "::error title=release::could not attach the assets to the GitHub Release $TAG"
+                  exit 1

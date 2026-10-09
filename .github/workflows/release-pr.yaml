@@ -1,0 +1,65 @@
+name: 'Release PR'
+
+# The standing release PR: every push to main lets release-please recompute one PR,
+# "chore(main): release X.Y.Z", from the Conventional Commits since the last release
+# (release-please-config.json: release-type go, extra-files bump internal/version and the image
+# reference in config/manager; .release-please-manifest.json: the released version).
+# Merging that PR IS the release: the merge's push runs this workflow again, and release-please
+# tags vX.Y.Z and publishes the GitHub Release.
+#
+# Everything runs on the default GITHUB_TOKEN — no personal token, no App. GitHub starts no
+# workflow from a tag or a Release that token created, so the release cannot wait for an event
+# of its own: when release-please reports `release_created`, the job `release` runs
+# ./.github/workflows/release.yaml in THIS run, as a reusable workflow with the tag (the image,
+# the binaries, the assets). release.yaml also takes workflow_dispatch with a tag to re-run a
+# release by hand.
+#
+# The same rule applies to the release PR itself: opened by GITHUB_TOKEN, it starts no
+# pull_request workflow. Close and reopen it (or push to it) to run CI and PR semantics on it.
+# The repository must let GitHub Actions create pull requests.
+
+on:
+    push:
+        branches: [ "main" ]
+
+permissions: {}
+
+# A run that is releasing is never cancelled by the next push.
+concurrency:
+    group: release-pr
+    cancel-in-progress: false
+
+jobs:
+    release-please:
+        name: Maintain the release PR
+        if: ${{ vars.TEQUILA_RELEASE_AUTOMATION != 'false' }}
+        runs-on: ubuntu-latest
+        timeout-minutes: 10
+        permissions:
+            contents: write
+            pull-requests: write
+        outputs:
+            release_created: ${{ steps.release-please.outputs.release_created }}
+            tag_name: ${{ steps.release-please.outputs.tag_name }}
+        steps:
+            # Re-runnable by design: the release PR is recomputed from the repository, and a
+            # release already created is found, never created twice.
+            - name: release-please
+              id: release-please
+              uses: googleapis/release-please-action@v5
+              timeout-minutes: 5
+              with:
+                  token: ${{ github.token }}
+
+    release:
+        name: Release
+        needs: release-please
+        if: ${{ needs.release-please.outputs.release_created == 'true' }}
+        # The ceiling of the called jobs: contents write for the assets, id-token write for the
+        # image job's identity at the registry.
+        permissions:
+            contents: write
+            id-token: write
+        uses: ./.github/workflows/release.yaml
+        with:
+            tag: ${{ needs.release-please.outputs.tag_name }}

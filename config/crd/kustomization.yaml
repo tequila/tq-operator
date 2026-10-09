@@ -1,0 +1,4 @@
+# The Estate CRD, generated from api/v1alpha1 by `make manifests`. Released as the asset
+# estates.estate.tequila.dev.yaml; an estate's render vendors that asset per operator release.
+resources:
+  - bases/estate.tequila.dev_estates.yaml
