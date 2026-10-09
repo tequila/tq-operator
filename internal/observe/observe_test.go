@@ -66,7 +66,8 @@ func TestTransformsDropWhatIsNeverRead(t *testing.T) {
 	}
 	dep := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Name: "iam-api", Namespace: "tequila",
-			Labels:      map[string]string{"app.kubernetes.io/name": "iam", "team-secret-label": "x"},
+			Labels: map[string]string{"app.kubernetes.io/name": "iam", "team-secret-label": "x",
+				"kustomize.toolkit.fluxcd.io/name": "services-iam", "kustomize.toolkit.fluxcd.io/namespace": "flux-system"},
 			Annotations: map[string]string{"klass8s.dev/app": "iam", "kubectl.kubernetes.io/last-applied-configuration": "{…}"}},
 		Spec: appsv1.DeploymentSpec{Replicas: &replicas, Template: corev1.PodTemplateSpec{Spec: *pod.Spec.DeepCopy()}},
 	}
@@ -89,8 +90,10 @@ func TestTransformsDropWhatIsNeverRead(t *testing.T) {
 	}}
 	k := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": "Kustomization",
-		"metadata": map[string]any{"name": "services-iam", "namespace": "flux-system"},
-		"spec": map[string]any{"path": "./services/iam/prod", "postBuild": map[string]any{"substitute": map[string]any{"X": "y"}},
+		"metadata": map[string]any{"name": "services-iam", "namespace": "flux-system", "annotations": map[string]any{
+			"tequila.dev/attached-by": "developer@example-org", "tequila.dev/attached-from": "/home/developer/src/iam",
+			"tequila.dev/attached-since": "2026-10-05T12:00:00Z", "kustomize.toolkit.fluxcd.io/reconcile": "disabled"}},
+		"spec": map[string]any{"path": "./services/iam/prod", "suspend": true, "postBuild": map[string]any{"substitute": map[string]any{"X": "y"}},
 			"sourceRef": map[string]any{"kind": "GitRepository", "name": "flux-system"}},
 		"status": map[string]any{"lastAppliedRevision": "main@sha1:a", "inventory": map[string]any{"entries": []any{"x"}},
 			"conditions": []any{map[string]any{"type": "Ready", "status": "True", "reason": "ReconciliationSucceeded",
@@ -112,15 +115,32 @@ func TestTransformsDropWhatIsNeverRead(t *testing.T) {
 	kept := dump.String()
 	for _, never := range []string{"hunter2", "DB_PASSWORD", "s3cr3t", "iam-jwt", "secret-annotation", "pod message", "log line",
 		"team-secret-label", "last-applied", "10.0.0.1", "machine-id-value", "boot-id-value", "kubelet is posting", "REMOTE_KEY",
-		"binding", "postBuild", "inventory", "Applied revision", "lastHeartbeatTime: \"2"} {
+		"binding", "postBuild", "inventory", "Applied revision", "lastHeartbeatTime: \"2",
+		"developer@example-org", "/home/developer", "attached-from", "attached-since", "reconcile: disabled"} {
 		if strings.Contains(kept, never) {
 			t.Errorf("a transform kept %q", never)
 		}
 	}
 	for _, needed := range []string{"img:v1", "img@sha256:x", "CrashLoopBackOff", "klass8s.dev/app: iam", "arm64", "v1.35.1",
-		"aws:///i-1", "SecretSyncedError", "main@sha1:a", "ReconciliationSucceeded", "2026-10-05T13:00:00Z", "flux-system"} {
+		"aws:///i-1", "SecretSyncedError", "main@sha1:a", "ReconciliationSucceeded", "2026-10-05T13:00:00Z", "flux-system",
+		"kustomize.toolkit.fluxcd.io/name: services-iam", "kustomize.toolkit.fluxcd.io/namespace: flux-system",
+		"tequila.dev/attached-by: \"\"", "suspend: true"} {
 		if !strings.Contains(kept, needed) {
 			t.Errorf("a transform dropped %q", needed)
 		}
+	}
+	// The attachment is read as a fact, not a value: a Kustomization without the annotation
+	// keeps none.
+	delete(k.Object["metadata"].(map[string]any), "annotations")
+	out, err := TransformKustomization(k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ann := out.(*unstructured.Unstructured).GetAnnotations(); len(ann) != 0 {
+		t.Errorf("a Kustomization without the annotation kept %v", ann)
+	}
+	read := readKustomization(*out.(*unstructured.Unstructured))
+	if read.AttachAnnotated || !read.Suspended || read.Attached() {
+		t.Errorf("read %+v", read)
 	}
 }

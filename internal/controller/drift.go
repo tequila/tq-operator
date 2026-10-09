@@ -32,20 +32,29 @@ var driftOrder = []estatev1alpha1.DriftKind{
 //   - NotReady: a Kustomization or FluxInstance whose Ready is False; a Deployment with fewer
 //     ready replicas than desired.
 //   - SecretNotResolvable: an ExternalSecret that is not ready.
+//   - Undeclared: a services-namespace workload running a platform image that spec.services
+//     does not list (observed: the image reference).
 //   - NoEstate: no Estate is declared (spec nil).
 //
-// Undeclared and crash-loop drift arrive in a later release.
+// An attached workload (a developer's checkout running over the render) and the suspended,
+// annotated Kustomization behind it are never drift: the Drifted condition is what it would
+// be without them. A crash loop is reported on the workload and in health, not as drift: a
+// crash-looping Deployment is NotReady by its replica counts already.
 func ComputeDrift(spec *estatev1alpha1.EstateSpec, obs *observe.Observation, workloads []estatev1alpha1.Workload) []estatev1alpha1.Drift {
 	var out []estatev1alpha1.Drift
 	add := func(kind estatev1alpha1.DriftKind, subject string, declared, observed *string) {
 		out = append(out, estatev1alpha1.Drift{Kind: kind, Subject: subject, Declared: declared, Observed: observed})
 	}
+	attached := func(w estatev1alpha1.Workload) bool { return w.State == estatev1alpha1.WorkloadAttached }
 
 	if spec == nil {
 		add(estatev1alpha1.DriftNoEstate, "estate", nil, nil)
 	} else {
 		services := declaredVersions(spec)
 		for _, w := range workloads {
+			if attached(w) {
+				continue
+			}
 			for _, img := range w.Images {
 				name := imageService(img.Ref, services)
 				if name == "" {
@@ -62,6 +71,9 @@ func ComputeDrift(spec *estatev1alpha1.EstateSpec, obs *observe.Observation, wor
 
 	if obs.Flux != nil {
 		for _, k := range obs.Flux.Kustomizations {
+			if k.Attached() {
+				continue
+			}
 			if src := obs.Flux.Sources[k.SourceKey]; src != nil && k.AppliedRevision != nil && *k.AppliedRevision != *src {
 				add(estatev1alpha1.DriftAppliedBehind, k.Name, ptr(*src), ptr(*k.AppliedRevision))
 			}
@@ -74,6 +86,9 @@ func ComputeDrift(spec *estatev1alpha1.EstateSpec, obs *observe.Observation, wor
 		}
 	}
 	for _, w := range workloads {
+		if attached(w) {
+			continue
+		}
 		if w.Replicas.Desired > 0 && w.Replicas.Ready < w.Replicas.Desired {
 			add(estatev1alpha1.DriftNotReady, w.Namespace+"/"+w.Name,
 				ptr(strconv.Itoa(int(w.Replicas.Desired))), ptr(strconv.Itoa(int(w.Replicas.Ready))))
@@ -83,6 +98,19 @@ func ComputeDrift(spec *estatev1alpha1.EstateSpec, obs *observe.Observation, wor
 		if !es.Ready {
 			add(estatev1alpha1.DriftSecretNotResolvable, es.Namespace+"/"+es.Name, nil, ptr(orUnknown(es.Reason)))
 		}
+	}
+	for _, w := range workloads {
+		if !w.Undeclared || attached(w) {
+			continue
+		}
+		observed := ""
+		for _, img := range w.Images {
+			if isPlatformImage(img.Ref) {
+				observed = img.Ref
+				break
+			}
+		}
+		add(estatev1alpha1.DriftUndeclared, w.Namespace+"/"+w.Name, nil, ptr(observed))
 	}
 
 	rank := map[estatev1alpha1.DriftKind]int{}
@@ -112,14 +140,21 @@ func declaredVersions(spec *estatev1alpha1.EstateSpec) map[string]string {
 	return out
 }
 
-// imageService returns the declared service whose images the reference names — the longest
-// name n with a repository ending in platform/n or platform/n-* — or "".
+// isPlatformImage reports whether a reference names a platform image: its repository path
+// ends in platform/<name>, on whichever registry — the hosted one, the installation's own
+// or a local mirror — the path decides, never the host.
+func isPlatformImage(ref string) bool {
+	segments := strings.Split(imageRepository(ref), "/")
+	return len(segments) >= 2 && segments[len(segments)-2] == "platform"
+}
+
+// imageService returns the declared service (a key of services) whose images the reference
+// names — the longest name n with a repository ending in platform/n or platform/n-* — or "".
 func imageService(ref string, services map[string]string) string {
-	repo := imageRepository(ref)
-	segments := strings.Split(repo, "/")
-	if len(segments) < 2 || segments[len(segments)-2] != "platform" {
+	if !isPlatformImage(ref) {
 		return ""
 	}
+	segments := strings.Split(imageRepository(ref), "/")
 	last := segments[len(segments)-1]
 	best := ""
 	for name := range services {

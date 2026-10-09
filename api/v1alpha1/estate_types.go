@@ -10,6 +10,10 @@ import (
 // The markers below therefore serve two generators: controller-gen (the CRD) and
 // internal/schemagen (schemas/report.estate.v1.json). Fields are never `omitempty` inside a
 // shared type: the report carries every key, and an absent value is an explicit null.
+//
+// The report schema grows additively within v1: a field added after the schema's first release
+// is marked `+optional` — the schema does not require it, because a report from an older
+// operator lacks it — and this operator always sends it. Nothing is removed, renamed or retyped.
 
 // Capability is a rung of the operator's ladder: observe, verify, gate, act — each rung adds
 // one capability to the one below it.
@@ -245,6 +249,16 @@ type KustomizationStatus struct {
 	// LastReconcile is the Ready condition's last transition.
 	// +nullable
 	LastReconcile *metav1.Time `json:"lastReconcile"`
+	// Suspended is spec.suspend: Flux applies nothing from it until it is resumed.
+	// +optional
+	Suspended bool `json:"suspended"`
+	// Attached is true when the Kustomization is suspended AND carries the attachment
+	// annotation (tequila.dev/attached-by) a developer's inner loop writes when it runs a local
+	// checkout over the rendered workloads. The workloads it applies report state attached,
+	// and neither they nor the Kustomization are drift. Only the annotation's presence is
+	// read; who attached is never held or reported.
+	// +optional
+	Attached bool `json:"attached"`
 }
 
 // RunningStatus is what the kubelet runs.
@@ -262,6 +276,19 @@ type RunningEstate struct {
 	OperationsK8s *string `json:"operationsK8s"`
 }
 
+// WorkloadState is who runs a workload: managed — Flux applies the render; attached — a
+// developer's local checkout runs over the render, the Flux Kustomization suspended and
+// annotated by their inner loop, so what runs is deliberately not the render.
+// +kubebuilder:validation:Enum=managed;attached
+type WorkloadState string
+
+const (
+	// WorkloadManaged: Flux applies the render.
+	WorkloadManaged WorkloadState = "managed"
+	// WorkloadAttached: a developer's checkout runs over the render; never drift.
+	WorkloadAttached WorkloadState = "attached"
+)
+
 // Workload is one Deployment of the two estate namespaces.
 type Workload struct {
 	Namespace string `json:"namespace"`
@@ -275,6 +302,21 @@ type Workload struct {
 	Replicas Replicas `json:"replicas"`
 	// +kubebuilder:validation:MaxItems=16
 	Images []Image `json:"images"`
+	// State is managed, or attached while a developer's inner loop runs a checkout over it.
+	// +optional
+	State WorkloadState `json:"state"`
+	// Undeclared is true for a services-namespace workload whose image is a platform image
+	// (its repository path is platform/<name>) and whose service spec.services does not list
+	// — such a workload is also an Undeclared drift. Never true in the platform namespace.
+	// +optional
+	Undeclared bool `json:"undeclared"`
+	// CrashLooping is true while a container of one of the workload's Pods waits in
+	// CrashLoopBackOff.
+	// +optional
+	CrashLooping bool `json:"crashLooping"`
+	// Restarts is the sum of the container restart counts over the workload's current Pods.
+	// +optional
+	Restarts int32 `json:"restarts"`
 }
 
 // Replicas is a workload's desired and ready replica counts.
@@ -322,7 +364,8 @@ const (
 	DriftNotReady DriftKind = "NotReady"
 	// DriftSecretNotResolvable: an ExternalSecret is not ready.
 	DriftSecretNotResolvable DriftKind = "SecretNotResolvable"
-	// DriftUndeclared: a platform/* workload runs that spec does not list (not yet reported).
+	// DriftUndeclared: a platform/* workload runs in the services namespace that spec.services
+	// does not list (declared nil, observed the image reference).
 	DriftUndeclared DriftKind = "Undeclared"
 	// DriftNoEstate: the operator runs and no Estate is declared.
 	DriftNoEstate DriftKind = "NoEstate"

@@ -24,9 +24,11 @@ var timeType = reflect.TypeFor[metav1.Time]()
 
 // ReportSchema generates the report schema from report.Report.
 //
-// The rules: every property is required — an absent value is an explicit
-// null where the type allows one; every object is closed; every string is at most
-// report.MaxStringLength characters; caps and enums come from the markers.
+// The rules: every property is required — an absent value is an explicit null where the type
+// allows one — except a property marked `+optional`, which a later release added: an older
+// operator's report lacks it, so the schema does not require it (this operator always sends
+// it); every object is closed; every string is at most report.MaxStringLength characters; caps
+// and enums come from the markers.
 func ReportSchema(m *Markers) (map[string]any, error) {
 	g := &reportGen{markers: m}
 	root, err := g.schema(reflect.TypeFor[report.Report](), "")
@@ -37,7 +39,11 @@ func ReportSchema(m *Markers) (map[string]any, error) {
 	root["$id"] = ReportSchemaID
 	root["title"] = report.SchemaID
 	root["description"] = "The estate report tq-operator sends to the console: Estate.status plus " +
-		"the declared echo and the operator's identity. Every key is required; an absent value is null."
+		"the declared echo and the operator's identity. Every key is required; an absent value is null. " +
+		"Versioning: the schema grows additively within v1 — a later release may add properties, each " +
+		"optional in the schema and always sent by the operator that added it; nothing is removed, " +
+		"renamed or retyped. A report from an older operator validates against a newer schema; a newer " +
+		"report validates against an older schema once the properties that schema lacks are removed."
 	return root, nil
 }
 
@@ -163,7 +169,9 @@ func (g *reportGen) object(t reflect.Type, typeKey string) (map[string]any, erro
 			return nil, err
 		}
 		properties[name] = fs
-		required = append(required, name)
+		if _, optional := g.markers.value(typeKey+"."+f.Name, "optional"); !optional {
+			required = append(required, name)
+		}
 	}
 	sort.Strings(required)
 	s := map[string]any{

@@ -125,6 +125,7 @@ func TestAssembledReportValidates(t *testing.T) {
 	st.Applied.Source.Kind = "GitRepository"
 	st.Applied.Kustomizations[0].LastReconcile = &metav1.Time{Time: time.Date(2026, 10, 5, 13, 0, 0, 0, time.UTC)}
 	st.Running.Workloads[0].Kind = "Deployment"
+	st.Running.Workloads[0].State = estatev1alpha1.WorkloadAttached
 	st.Running.Workloads[0].Images[0].Signature = "unverified"
 	st.Drift[0].Kind = estatev1alpha1.DriftRunningBehind
 	st.Preflight = nil

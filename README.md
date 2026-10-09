@@ -48,9 +48,9 @@ See [config/samples/estate_v1alpha1_estate.yaml](config/samples/estate_v1alpha1_
 |---|---|
 | `cluster` | the Kubernetes version, platform (`eks`, `k3s`, `doks` or `generic`), node count, architectures and kubelet versions — never a node's name |
 | `applied` | Flux's source revision; each Kustomization's readiness, applied revision, reason and last transition |
-| `running` | every Deployment of the two estate namespaces: replicas, image references, and the digests the kubelet pulled. Also the platform estate's version stamped on its workloads |
+| `running` | every Deployment of the two estate namespaces: replicas, image references, the digests the kubelet pulled, its `state` (`managed` or `attached`), whether it is `undeclared`, whether it is `crashLooping` and its `restarts`. Also the platform estate's version stamped on its workloads |
 | `externalSecrets` | total, ready, and the not-ready ones with ESO's reason |
-| `drift` | `RunningBehind`, `AppliedBehind`, `NotReady`, `SecretNotResolvable`, `NoEstate` (`Undeclared` arrives in a later release) |
+| `drift` | `RunningBehind`, `AppliedBehind`, `NotReady`, `SecretNotResolvable`, `Undeclared`, `NoEstate` |
 | `health` | Pods by phase, and crash-looping workloads |
 | `conditions` | `Observed`, `Reported` and `Drifted`, each with the `observedGeneration` it was set for |
 | `lastReport` | when the last report was sent, its outcome and its HTTP status |
@@ -71,6 +71,29 @@ release:
 - [schemas/report.estate.v1.json](schemas/report.estate.v1.json) — the report
   `tequila.dev/report/estate/v1`. It is closed (`additionalProperties: false`), every key is
   required, and every string is capped at 512 characters.
+
+The report schema grows **additively within v1**: a release may add properties, each optional in
+the schema (a report from an older operator lacks it) and always sent by the operator that added
+it; nothing is removed, renamed or retyped. An older report validates against a newer schema; a
+newer report validates against an older schema once the properties that schema lacks are removed.
+The schema's `description` states the policy; `internal/schemagen/testdata/report.shape` marks
+each added property `optional`.
+
+## What the operator reports about workloads
+
+Each Deployment of the two estate namespaces is one entry of `status.running.workloads`, with
+its replicas and images and three facts the operator reads from the cluster:
+
+| Fact | Meaning | Where it shows |
+|---|---|---|
+| **attached** (`state: attached`) | A developer's inner loop runs a local checkout over the rendered workload: it suspended the Flux Kustomization that applies the unit and annotated it (`tequila.dev/attached-by`). The operator reads that annotation's presence only — never who attached — and reports the Kustomization as `suspended: true, attached: true` and every Deployment it applied (by Flux's own `kustomize.toolkit.fluxcd.io/name` label) as `attached`. An attached workload is **never drift**: not `RunningBehind` on its local tag, not `NotReady` mid-rollout, and its Kustomization is not `AppliedBehind`. `Drifted` is what it would be without that workload. A suspended Kustomization *without* the annotation changes nothing | `running.workloads[].state`, `applied.kustomizations[].{suspended,attached}` |
+| **undeclared** (`undeclared: true`) | A workload in the services namespace runs a platform image — its repository path is `platform/<name>`, on whichever registry; the path decides, never the host — and no declared service in `spec.services` accounts for it, by label, app annotation or image name. It is reported whatever `ownServices` says, and it is one `Undeclared` drift (`subject` the workload, `observed` the image). Workloads in the platform namespace are estate units and are never undeclared | `running.workloads[].undeclared`, `drift[]` kind `Undeclared` |
+| **crash loops** (`crashLooping`, `restarts`) | From the Pods' container statuses: `crashLooping` is true while a container waits in `CrashLoopBackOff`; `restarts` sums the restart counts over the workload's current Pods. A crash loop is on the workload and in `health.pods.crashLooping`, not a drift of its own — a crash-looping Deployment is already `NotReady` by its replica counts | `running.workloads[].{crashLooping,restarts}`, `health.pods.crashLooping` |
+
+```console
+$ kubectl -n tq-operator get estate prod -o json \
+    | jq -r '.status.running.workloads[] | "\(.namespace)/\(.name)\t\(.state)\tundeclared=\(.undeclared)\tcrashLooping=\(.crashLooping) restarts=\(.restarts)"'
+```
 
 ## Identity
 
@@ -120,6 +143,32 @@ registers. Deleting the binding stops the reports: `Reported` reads `False/Unbou
 - `manager/` — the namespace with `pod-security.kubernetes.io/enforce: restricted`, the Pod
   (no port, no probe, no Secret), the signing-keys ConfigMap and the egress-only NetworkPolicy.
 
+## Verifying the operator yourself
+
+Two things are published for that, and both are plain `kubectl`:
+
+- **[docs/audit-envelope.md](docs/audit-envelope.md)** — the twelve promises of the envelope,
+  each with the commands that verify it on your estate and the answer to expect.
+- **[test/e2e/run.sh](test/e2e/run.sh)** — the kind e2e CI runs on every change. Its second
+  part is the envelope as a checklist against the *deployed* operator: the exact rules the
+  identity holds in every namespace (a `SelfSubjectRulesReview`, what
+  `kubectl auth can-i --list --as=system:serviceaccount:tq-operator:tq-operator` shows, compared
+  with the documented list), no Secrets, no `pods/exec`, no Service and no HTTPRoute, no `ports:`
+  in the Pod spec, no admission webhook of the operator's, a snapshot of every Deployment,
+  Kustomization and Estate identical before and after the operator is scaled to zero, and no
+  finalizer on any Estate. Every check prints one `[ ok ]` or `[FAIL]` line.
+
+To run the e2e on your machine you need Docker and kind:
+
+```bash
+kind create cluster --name tq-operator-e2e
+make test-e2e
+```
+
+To re-run only the envelope against an estate of yours, set `OPERATOR_NS`, `PLATFORM_NS`,
+`SERVICES_NS` and `FLUX_NS` for your environment and run the Part 2 commands of the script with
+your `kubectl` context — they read, and scale the operator to zero and back; nothing else.
+
 ## Development
 
 ```bash
@@ -138,9 +187,10 @@ The tests that hold the envelope:
 | Test | Holds |
 |---|---|
 | `internal/controller/rbac_golden_test.go` | the generated RBAC equals the hand-written RBAC in `test/golden/rbac-observe.yaml` and grants nothing the envelope forbids |
-| `internal/schemagen/schemagen_test.go` | the report schema equals the report contract line for line (`testdata/report.shape`); the committed schemas are fresh |
+| `internal/schemagen/schemagen_test.go` | the report schema equals the report contract line for line (`testdata/report.shape`); the committed schemas are fresh; the schema is additive within v1 (a first-release report validates today, today's minus the added properties validates against the first release) |
 | `internal/report/allowlist_test.go` | a report with every field of every type filled carries no key outside the schema |
 | `internal/report/client_test.go` | the exchange and the door's answers (202, 401, `invalid_grant`, 503 …) and the backoff |
+| `internal/controller/drift_test.go` | attribution and drift: an attached workload is never drift, an undeclared platform image is, a crash loop is on the workload and not a drift |
 | `internal/controller/estate_controller_test.go` | the reconciler against envtest: status, drift, Events, the report byte-equal to the status, the console going down |
 | `cmd/main_test.go` | no listening socket |
 

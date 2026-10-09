@@ -26,15 +26,22 @@ type Flux struct {
 
 // Kustomization is one Flux Kustomization.
 type Kustomization struct {
-	Name            string
-	SourceKey       string // "<Kind>/<name>" of spec.sourceRef in the same namespace; "" otherwise
-	Suspended       bool
+	Name      string
+	SourceKey string // "<Kind>/<name>" of spec.sourceRef in the same namespace; "" otherwise
+	Suspended bool
+	// AttachAnnotated is true when the attachment annotation is present: a developer's inner
+	// loop suspended this Kustomization to run a checkout over its workloads. Attached means
+	// Suspended && AttachAnnotated — a stale annotation on a resumed Kustomization is nothing.
+	AttachAnnotated bool
 	AppliedRevision *string
 	// ReadyStatus is the Ready condition's status: "True", "False", "Unknown" or "" (none yet).
 	ReadyStatus   string
 	Reason        string
 	LastReconcile *metav1.Time
 }
+
+// Attached reports whether a developer's checkout runs over the Kustomization's workloads.
+func (k Kustomization) Attached() bool { return k.Suspended && k.AttachAnnotated }
 
 // SourceKey names a source as "<Kind>/<name>".
 func SourceKey(kind, name string) string { return kind + "/" + name }
@@ -105,6 +112,7 @@ func readKustomization(u unstructured.Unstructured) Kustomization {
 		k.SourceKey = SourceKey(kind, name)
 	}
 	k.Suspended, _, _ = unstructured.NestedBool(u.Object, "spec", "suspend")
+	_, k.AttachAnnotated = u.GetAnnotations()[AnnotationAttachedBy]
 	if rev, found, _ := unstructured.NestedString(u.Object, "status", "lastAppliedRevision"); found && rev != "" {
 		k.AppliedRevision = &rev
 	}

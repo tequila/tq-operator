@@ -2,16 +2,21 @@
 # pointer per line: "<path> <type>[ annotations]". `{}` is a map's value, `[]` an array's item.
 # schemagen_test.go holds the generated schemas/report.estate.v1.json equal to this.
 # declared.source is {repository}: no revision, no timestamp — the spec is a pure function of
-# tequila.yaml. A cap or a nullability that needs a reason has it after a `#`.
+# tequila.yaml. A cap or a nullability that needs a reason has it after a `#`. `optional` marks
+# a property a release after the first added: the schema does not require it (an older
+# operator's report lacks it), the operator that knows it always sends it — the schema grows
+# additively within v1, nothing is removed, renamed or retyped.
 / object
 /applied object|null
 /applied/kustomizations array maxItems=200
 /applied/kustomizations/[] object
 /applied/kustomizations/[]/appliedRevision string|null     # null before Flux applied anything
+/applied/kustomizations/[]/attached boolean optional        # suspended by a developer's inner loop, a checkout running over its workloads
 /applied/kustomizations/[]/lastReconcile string|null format=date-time   # the Ready condition's last transition; null before one
 /applied/kustomizations/[]/name string
 /applied/kustomizations/[]/ready boolean
 /applied/kustomizations/[]/reason string
+/applied/kustomizations/[]/suspended boolean optional
 /applied/source object
 /applied/source/kind string enum=GitRepository|OCIRepository
 /applied/source/name string
@@ -78,6 +83,7 @@
 /running/truncated boolean
 /running/workloads array maxItems=500
 /running/workloads/[] object
+/running/workloads/[]/crashLooping boolean optional
 /running/workloads/[]/images array maxItems=16             # a bound of the implementation
 /running/workloads/[]/images/[] object
 /running/workloads/[]/images/[]/digest string|null
@@ -89,5 +95,8 @@
 /running/workloads/[]/replicas object
 /running/workloads/[]/replicas/desired integer
 /running/workloads/[]/replicas/ready integer
+/running/workloads/[]/restarts integer optional             # the sum over the workload's current Pods
 /running/workloads/[]/service string|null
+/running/workloads/[]/state string enum=managed|attached optional
+/running/workloads/[]/undeclared boolean optional           # a platform image spec.services does not list; never in the platform namespace
 /schema string const=tequila.dev/report/estate/v1

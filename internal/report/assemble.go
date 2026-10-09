@@ -114,6 +114,9 @@ func Normalize(r *Report) {
 		if w.Kind == "" {
 			w.Kind = "Deployment"
 		}
+		if w.State == "" {
+			w.State = estatev1alpha1.WorkloadManaged
+		}
 		for j := range w.Images {
 			if w.Images[j].Signature == "" {
 				w.Images[j].Signature = "unverified"

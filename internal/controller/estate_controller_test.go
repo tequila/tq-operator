@@ -180,6 +180,12 @@ func seed(t *testing.T, ctx context.Context, c client.Client) {
 		deployment("tequila", "iam-api", "iam", 2, 2, "registry.tequila.dev/platform/iam-api:v0.45.4", nil),
 		deployment("tequila", "iam-worker", "iam", 1, 1, "registry.tequila.dev/platform/iam-worker:v0.45.3", nil),
 		deployment("tequila", "backend-api", "backend", 1, 1, "registry.tequila.dev/acme/backend-api:v1.2.3", nil),
+		// A developer's checkout runs over iam-mailer: its Kustomization (below) is suspended and
+		// annotated. Behind on its version and not ready — and never drift.
+		deployment("tequila", "iam-mailer", "iam", 1, 0, "registry.tequila.dev/platform/iam-mailer:dev-local",
+			map[string]string{"kustomize.toolkit.fluxcd.io/name": "services-iam-mailer", "kustomize.toolkit.fluxcd.io/namespace": "flux-system"}),
+		// A platform image no declared service accounts for.
+		deployment("tequila", "ghost-api", "ghost", 1, 1, "registry.tequila.dev/platform/ghost-api:v1.0.0", nil),
 		deployment("operations", "kgateway", "kgateway", 1, 1, "cr.kgateway.dev/kgateway:v2.1.0", map[string]string{"estate.tequila.dev/operations-k8s": "v0.50.0"}),
 	} {
 		status := d.Status
@@ -195,6 +201,7 @@ func seed(t *testing.T, ctx context.Context, c client.Client) {
 			cs := corev1.ContainerStatus{Name: "app", Image: image, ImageID: imageID, Ready: waiting == ""}
 			if waiting != "" {
 				cs.State.Waiting = &corev1.ContainerStateWaiting{Reason: waiting, Message: "back-off restarting"}
+				cs.RestartCount = 7
 			}
 			p.Status.Phase = corev1.PodRunning
 			p.Status.ContainerStatuses = []corev1.ContainerStatus{cs}
@@ -217,6 +224,11 @@ func seed(t *testing.T, ctx context.Context, c client.Client) {
 			map[string]any{"lastAppliedRevision": "main@sha1:bbb", "conditions": []any{map[string]any{
 				"type": "Ready", "status": "False", "reason": "HealthCheckFailed", "message": "timeout waiting for kgateway",
 				"lastTransitionTime": "2026-10-05T13:30:00Z"}}}),
+		attached(unstructuredObj(observe.KustomizationGVK, "flux-system", "services-iam-mailer",
+			map[string]any{"sourceRef": map[string]any{"kind": "GitRepository", "name": "flux-system"}, "suspend": true},
+			map[string]any{"lastAppliedRevision": "main@sha1:aaa", "conditions": []any{map[string]any{
+				"type": "Ready", "status": "False", "reason": "HealthCheckFailed", "message": "timeout waiting for iam-mailer",
+				"lastTransitionTime": "2026-10-05T13:30:00Z"}}})),
 		unstructuredObj(observe.ExternalSecretGVK, "tequila", "iam-app-secrets",
 			map[string]any{"data": []any{map[string]any{"secretKey": "K", "remoteRef": map[string]any{"key": "remote-key-name"}}}},
 			map[string]any{"conditions": []any{map[string]any{"type": "Ready", "status": "False", "reason": "SecretSyncedError", "message": "could not get secret"}}}),
@@ -229,6 +241,18 @@ func seed(t *testing.T, ctx context.Context, c client.Client) {
 		u.Object["status"] = status
 		must(t, c.Status().Update(ctx, u))
 	}
+}
+
+// attached marks a Kustomization the way a developer's inner loop does when it suspends the
+// unit to run a local checkout over its workloads.
+func attached(u *unstructured.Unstructured) *unstructured.Unstructured {
+	u.SetAnnotations(map[string]string{
+		"tequila.dev/attached-by":               "developer@example-org",
+		"tequila.dev/attached-from":             "/home/developer/src/iam",
+		"tequila.dev/attached-since":            "2026-10-05T12:00:00Z",
+		"kustomize.toolkit.fluxcd.io/reconcile": "disabled",
+	})
+	return u
 }
 
 func estate() *estatev1alpha1.Estate {
@@ -374,25 +398,40 @@ func TestEstateReconcilerObservesComparesAndReports(t *testing.T) {
 		t.Errorf("cluster = %+v", cl)
 	}
 
-	// Applied: the flux-system source and both Kustomizations.
+	// Applied: the flux-system source and the three Kustomizations — the attached one says so.
 	ap := est.Status.Applied
-	if ap == nil || ap.Source.Kind != "GitRepository" || ap.Source.Name != "flux-system" || *ap.Source.Revision != "main@sha1:bbb" || len(ap.Kustomizations) != 2 {
+	if ap == nil || ap.Source.Kind != "GitRepository" || ap.Source.Name != "flux-system" || *ap.Source.Revision != "main@sha1:bbb" || len(ap.Kustomizations) != 3 {
 		t.Fatalf("applied = %+v", ap)
 	}
+	for _, k := range ap.Kustomizations {
+		if want := k.Name == "services-iam-mailer"; k.Suspended != want || k.Attached != want {
+			t.Errorf("kustomization %+v", k)
+		}
+	}
 
-	// Running: four workloads; attribution; the digest the Pod pulled; the estate's version.
+	// Running: six workloads; attribution; the digest the Pod pulled; the estate's version;
+	// the attached, the undeclared and the crash-looping one.
 	byName := map[string]estatev1alpha1.Workload{}
 	for _, w := range est.Status.Running.Workloads {
 		byName[w.Namespace+"/"+w.Name] = w
 	}
-	if len(byName) != 4 {
+	if len(byName) != 6 {
 		t.Errorf("workloads = %v", byName)
 	}
-	if w := byName["tequila/iam-api"]; w.Service == nil || *w.Service != "iam" || w.Replicas.Desired != 2 || w.Images[0].Digest == nil || *w.Images[0].Digest != digest || w.Images[0].Signature != "unverified" {
+	if w := byName["tequila/iam-api"]; w.Service == nil || *w.Service != "iam" || w.Replicas.Desired != 2 || w.Images[0].Digest == nil || *w.Images[0].Digest != digest || w.Images[0].Signature != "unverified" || w.State != "managed" || w.Undeclared || w.CrashLooping || w.Restarts != 0 {
 		t.Errorf("iam-api = %+v", w)
 	}
 	if w := byName["tequila/backend-api"]; w.Service != nil {
 		t.Errorf("a tenant's own service carries no service name: %+v", w)
+	}
+	if w := byName["tequila/iam-mailer"]; w.State != "attached" || w.Service == nil || *w.Service != "iam" {
+		t.Errorf("iam-mailer = %+v", w)
+	}
+	if w := byName["tequila/ghost-api"]; !w.Undeclared || w.Service != nil || w.State != "managed" {
+		t.Errorf("ghost-api = %+v", w)
+	}
+	if w := byName["tequila/iam-worker"]; !w.CrashLooping || w.Restarts != 7 {
+		t.Errorf("iam-worker = %+v", w)
 	}
 	if v := est.Status.Running.Estate.OperationsK8s; v == nil || *v != "v0.50.0" {
 		t.Errorf("running.estate = %v", v)
@@ -406,7 +445,8 @@ func TestEstateReconcilerObservesComparesAndReports(t *testing.T) {
 		t.Errorf("health = %+v", h)
 	}
 
-	// Drift: every kind rung observe produces, in order.
+	// Drift: every kind rung observe produces, in order — and nothing about the attached
+	// iam-mailer or its Kustomization, though both are behind and not ready.
 	var got []string
 	for _, d := range est.Status.Drift {
 		got = append(got, string(d.Kind)+" "+d.Subject)
@@ -416,6 +456,7 @@ func TestEstateReconcilerObservesComparesAndReports(t *testing.T) {
 		"AppliedBehind services-iam",
 		"NotReady platform-gateway",
 		"SecretNotResolvable tequila/iam-app-secrets",
+		"Undeclared tequila/ghost-api",
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("drift =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
@@ -435,7 +476,8 @@ func TestEstateReconcilerObservesComparesAndReports(t *testing.T) {
 	for _, e := range errs {
 		t.Errorf("report: %s", e)
 	}
-	for _, never := range []string{"never-reported", "DATABASE_PASSWORD", "node-a-secret-name", "iam-api-7d9f-abcde", "remote-key-name", "timeout waiting", "could not get secret"} {
+	for _, never := range []string{"never-reported", "DATABASE_PASSWORD", "node-a-secret-name", "iam-api-7d9f-abcde", "remote-key-name", "timeout waiting", "could not get secret",
+		"developer@example-org", "/home/developer", "attached-by"} {
 		if strings.Contains(string(body), never) {
 			t.Errorf("the report carries %q", never)
 		}
@@ -486,7 +528,7 @@ func TestEstateReconcilerObservesComparesAndReports(t *testing.T) {
 		t.Errorf("an unreachable console is not a reconcile failure: Observed = %+v (generation %d)", r, est.Generation)
 	}
 	neverGatesFlux(t, c)
-	if len(est.Status.Running.Workloads) != 4 {
+	if len(est.Status.Running.Workloads) != 6 {
 		t.Error("status must still be written while the console is down")
 	}
 }
