@@ -28,7 +28,7 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: operator
-          image: registry.tequila.dev/platform/tq-operator:v0.1.0 # x-release-please-version
+          image: registry.tequila.dev/platform/tq-operator:v0.2.0 # x-release-please-version
           args:
             - --interval=15m
             - --iam-url=https://id.tequila.dev
@@ -45,7 +45,7 @@ spec:
             # Reported as operator.image — the downward API cannot expose an image, so the
             # render sets the same reference here as in `image` above.
             - name: TQ_OPERATOR_IMAGE
-              value: registry.tequila.dev/platform/tq-operator:v0.1.0 # x-release-please-version
+              value: registry.tequila.dev/platform/tq-operator:v0.2.0 # x-release-please-version
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
