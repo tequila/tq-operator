@@ -505,6 +505,25 @@ func TestEstateReconcilerObservesComparesAndReports(t *testing.T) {
 		t.Errorf("events: %v", reasons)
 	}
 
+	// A Pod changes (one more restart): the change reaches the status within the debounce,
+	// not at the next heartbeat.
+	var worker corev1.Pod
+	must(t, c.Get(ctx, types.NamespacedName{Namespace: "tequila", Name: "iam-worker-5c4b-fghij"}, &worker))
+	worker.Status.ContainerStatuses[0].RestartCount = 8
+	must(t, c.Status().Update(ctx, &worker))
+	changedAt := time.Now()
+	est = waitFor(t, c, "iam-worker restarts 8", func(e *estatev1alpha1.Estate) bool {
+		for _, w := range e.Status.Running.Workloads {
+			if w.Name == "iam-worker" && w.Restarts == 8 {
+				return true
+			}
+		}
+		return false
+	})
+	if took := time.Since(changedAt); took > controller.Debounce+15*time.Second {
+		t.Errorf("a Pod change took %s to reach the status; the debounce is %s", took, controller.Debounce)
+	}
+
 	// The console goes down; a new render (a changed spec) is due at once and fails harmlessly.
 	fake.mu.Lock()
 	fake.unavail = true

@@ -34,6 +34,7 @@ dump() {
     kubectl -n "$OPERATOR_NS" get estate e2e -o yaml || true
     kubectl -n "$OPERATOR_NS" get events --sort-by=.lastTimestamp || true
     kubectl -n "$SERVICES_NS" get deploy,pods -o wide || true
+    kubectl -n "$SERVICES_NS" get pods -o json | jq -c '.items[] | {name: .metadata.name, phase: .status.phase, containers: .status.containerStatuses}' || true
     echo "::endgroup::"
 }
 trap dump ERR

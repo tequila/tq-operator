@@ -43,8 +43,10 @@ spec:
         - name: app
           image: registry.k8s.io/pause:3.10
 ---
-# A crash loop: the pause binary prints its version and exits, the kubelet restarts it and
-# backs off — CrashLoopBackOff with a growing restart count, from an image the cluster has.
+# A crash loop: the operator's own binary (an image kind already holds, so nothing is pulled)
+# refuses an unknown flag and exits non-zero; the kubelet restarts it and backs off —
+# CrashLoopBackOff with a growing restart count. It has to FAIL: a container that exits 0 is
+# shown Completed for most of its backoff, and CrashLoopBackOff only in between.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -61,8 +63,9 @@ spec:
     spec:
       containers:
         - name: app
-          image: registry.k8s.io/pause:3.10
-          command: ["/pause", "-v"]
+          image: tq-operator:e2e
+          imagePullPolicy: Never
+          args: ["--this-flag-does-not-exist"]
 ---
 # A platform image (the path says so, not the host) that spec.services does not list: an
 # Undeclared drift. Scaled to zero so nothing has to pull it — the template is what is judged.
