@@ -641,7 +641,7 @@
                 "description": "Workload is one Deployment of the two estate namespaces.",
                 "properties": {
                   "crashLooping": {
-                    "description": "CrashLooping is true while a container of one of the workload's Pods waits in\nCrashLoopBackOff.",
+                    "description": "CrashLooping is true while a container of one of the workload's Pods waits in\nCrashLoopBackOff, or lies terminated with at least one restart behind it in a Pod that is\nstill running (the kubelet will start it again).",
                     "type": "boolean"
                   },
                   "images": {

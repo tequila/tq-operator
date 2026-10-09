@@ -44,9 +44,9 @@ spec:
           image: registry.k8s.io/pause:3.10
 ---
 # A crash loop: the operator's own binary (an image kind already holds, so nothing is pulled)
-# refuses an unknown flag and exits non-zero; the kubelet restarts it and backs off —
-# CrashLoopBackOff with a growing restart count. It has to FAIL: a container that exits 0 is
-# shown Completed for most of its backoff, and CrashLoopBackOff only in between.
+# refuses an unknown flag and exits non-zero; the kubelet restarts it and backs off, the restart
+# count grows. Whether this kubelet reports the back-off as CrashLoopBackOff or leaves the
+# container terminated between starts, the operator calls it a crash loop.
 apiVersion: apps/v1
 kind: Deployment
 metadata:

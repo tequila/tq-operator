@@ -174,8 +174,9 @@ Two more facts the report carries about a workload, and what it never carries wi
   Kustomization is suspended and annotated. The operator reads the annotation's presence; the
   value (who attached, from where, since when) is dropped before the object enters its cache and
   cannot appear in the status or the report.
-- `crashLooping` and `restarts` come from the Pods' container statuses — the waiting reason and
-  the restart counts; never a log line, never a Pod name.
+- `crashLooping` and `restarts` come from the Pods' container statuses — the waiting reason, the
+  terminated state's exit code and reason, and the restart counts; never a log line, never a
+  termination message, never a Pod name.
 
 ## 6. Supply chain and runtime posture — partly met
 

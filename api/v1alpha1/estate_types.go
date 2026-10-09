@@ -311,7 +311,8 @@ type Workload struct {
 	// +optional
 	Undeclared bool `json:"undeclared"`
 	// CrashLooping is true while a container of one of the workload's Pods waits in
-	// CrashLoopBackOff.
+	// CrashLoopBackOff, or lies terminated with at least one restart behind it in a Pod that is
+	// still running (the kubelet will start it again).
 	// +optional
 	CrashLooping bool `json:"crashLooping"`
 	// Restarts is the sum of the container restart counts over the workload's current Pods.

@@ -216,9 +216,17 @@ func restarts(pod *corev1.Pod) int32 {
 	return int32(min(total, math.MaxInt32)) //nolint:gosec // clamped on this line
 }
 
+// crashLooping reports whether a container of the Pod is in a crash loop: it waits in
+// CrashLoopBackOff, or it lies terminated with at least one restart behind it while the Pod is
+// still Running — the kubelet will start it again. The second shape matters because a kubelet
+// may report the terminated state for the whole back-off and the waiting reason only briefly, or
+// not at all (observed on Kubernetes 1.37).
 func crashLooping(pod *corev1.Pod) bool {
 	for _, cs := range pod.Status.ContainerStatuses {
 		if cs.State.Waiting != nil && cs.State.Waiting.Reason == "CrashLoopBackOff" {
+			return true
+		}
+		if cs.State.Terminated != nil && cs.RestartCount > 0 && pod.Status.Phase == corev1.PodRunning {
 			return true
 		}
 	}

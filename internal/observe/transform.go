@@ -63,7 +63,8 @@ func pick(in map[string]string, names []string) map[string]string {
 }
 
 // TransformPod keeps a Pod's labels (for selector matching), owner references, container
-// images, phase and per-container image ID, readiness, restart count and waiting reason.
+// images, phase and per-container image ID, readiness, restart count, waiting reason and the
+// terminated state's exit code and reason — never a message.
 func TransformPod(obj any) (any, error) {
 	pod, ok := obj.(*corev1.Pod)
 	if !ok {
@@ -79,6 +80,9 @@ func TransformPod(obj any) (any, error) {
 		kept := corev1.ContainerStatus{Name: cs.Name, ImageID: cs.ImageID, Ready: cs.Ready, RestartCount: cs.RestartCount}
 		if cs.State.Waiting != nil {
 			kept.State.Waiting = &corev1.ContainerStateWaiting{Reason: cs.State.Waiting.Reason}
+		}
+		if cs.State.Terminated != nil {
+			kept.State.Terminated = &corev1.ContainerStateTerminated{ExitCode: cs.State.Terminated.ExitCode, Reason: cs.State.Terminated.Reason}
 		}
 		out.Status.ContainerStatuses = append(out.Status.ContainerStatuses, kept)
 	}
