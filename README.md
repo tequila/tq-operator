@@ -19,8 +19,8 @@ verify that with `kubectl`.
 
 ```console
 $ kubectl -n tq-operator get estates
-NAME   ENVIRONMENT   READY   REPORTED   DRIFTED   AGE
-prod   prod          True    True       False     3d
+NAME   ENVIRONMENT   OBSERVED   REPORTED   DRIFTED   AGE
+prod   prod          True       True       False     3d
 ```
 
 ## The `Estate` — `estate.tequila.dev/v1alpha1`
