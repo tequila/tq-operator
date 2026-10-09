@@ -66,27 +66,31 @@ can() { kubectl auth can-i "$@" --as="$SA" 2>/dev/null || true; }
 can_not() { [ "$(can "$@")" = no ]; }
 can_do() { [ "$(can "$@")" = yes ]; }
 
-# rules <namespace> — every "<group>/<resource>:<verb>" the operator's identity holds there, as
-# the API server answers a SelfSubjectRulesReview (what `kubectl auth can-i --list` shows); the
-# grants every authenticated identity has (the selfsubject* reviews) removed. Sorted.
-# --validate=false: kubectl's client-side validation lists CRDs, which the impersonated identity
-# may not — the review is a built-in kind and the API server validates it anyway.
+# rules <identity> <namespace> — every "<group>/<resource>:<verb>" an identity holds there, as the
+# API server answers a SelfSubjectRulesReview (what `kubectl auth can-i --list` shows). Sorted.
+# --validate=false: kubectl's client-side validation lists CRDs, which an impersonated identity
+# may not — the review is a built-in kind the API server validates anyway.
 rules_review() {
-    kubectl --as="$SA" create --validate=false -o json -f - <<EOF
-{"apiVersion":"authorization.k8s.io/v1","kind":"SelfSubjectRulesReview","spec":{"namespace":"$1"}}
+    kubectl --as="$1" create --validate=false -o json -f - <<EOF
+{"apiVersion":"authorization.k8s.io/v1","kind":"SelfSubjectRulesReview","spec":{"namespace":"$2"}}
 EOF
 }
 rules() {
-    rules_review "$1" | jq -r '
+    rules_review "$1" "$2" | jq -r '
         if .status.incomplete then error("incomplete rules review") else . end
         | .status.resourceRules[]
-        | select(([.resources[]? | startswith("selfsubject")] | any) | not)
         | . as $r | $r.apiGroups[] as $g | $r.resources[] as $res | $r.verbs[] as $v
         | "\($g)/\($res):\($v)" + (if (($r.resourceNames // []) | length) > 0 then "[" + ($r.resourceNames | join(",")) + "]" else "" end)' \
         | LC_ALL=C sort -u
 }
+# operator_rules <namespace> — the operator's rules minus what every ServiceAccount of this
+# cluster holds anyway (the selfsubject* reviews, and whatever this Kubernetes version grants
+# the system:serviceaccounts group by default), measured on a plain ServiceAccount the same way.
+operator_rules() {
+    LC_ALL=C comm -13 <(rules "system:serviceaccount:default:default" "$1") <(rules "$SA" "$1")
+}
 non_resource_verbs_are_get() {
-    [ "$(rules_review "$1" | jq -r '[.status.nonResourceRules[].verbs[]] | unique | join(",")')" = get ]
+    [ "$(rules_review "$SA" "$1" | jq -r '[.status.nonResourceRules[].verbs[]] | unique | join(",")')" = get ]
 }
 glw() { for v in get list watch; do echo "$1:$v"; done; }
 expected_rules() { # the documented envelope of rung observe, per namespace
@@ -104,7 +108,7 @@ expected_rules() { # the documented envelope of rung observe, per namespace
         esac
     } | LC_ALL=C sort -u
 }
-rules_equal() { diff <(expected_rules "$1") <(rules "$1"); }
+rules_equal() { diff <(expected_rules "$1") <(operator_rules "$1"); }
 
 no_webhooks() { [ -z "$(kubectl get validatingwebhookconfigurations,mutatingwebhookconfigurations -o name | grep -i tq-operator || true)" ]; }
 can_write_own_status() { can_do update estates --subresource=status -n "$OPERATOR_NS" && can_do patch estates --subresource=status -n "$OPERATOR_NS"; }
@@ -211,10 +215,10 @@ echo
 echo "Part 2 — the audit envelope against the deployed operator (docs/audit-envelope.md)"
 echo "  the identity: $SA"
 for ns in "$OPERATOR_NS" "$PLATFORM_NS" "$SERVICES_NS" "$FLUX_NS" default kube-system; do
-    check "#1" "in $ns the identity holds exactly the documented rules (kubectl auth can-i --list --as=$SA -n $ns)" rules_equal "$ns"
+    check "#1" "in $ns the identity holds exactly the documented rules beyond every ServiceAccount's defaults (kubectl auth can-i --list --as=$SA -n $ns)" rules_equal "$ns"
     if ! rules_equal "$ns" >/dev/null 2>&1; then
         echo "         expected (<) / actual (>):"
-        diff <(expected_rules "$ns") <(rules "$ns") | sed 's/^/         /' || true
+        diff <(expected_rules "$ns") <(operator_rules "$ns") | sed 's/^/         /' || true
     fi
     check "#1" "in $ns the non-resource grants are get only (discovery, version, health — what every identity has)" non_resource_verbs_are_get "$ns"
 done
