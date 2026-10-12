@@ -117,6 +117,8 @@ registers. Deleting the binding stops the reports: `Reported` reads `False/Unbou
 | Any other refusal (403 `estate_mismatch`, 410, `invalid_target`, 422) | backs off 1m … 1h | `False/Refused`; `lastReport.outcome` is `refused` or `invalid` |
 | A kind is not served (no CRD) or not permitted | observes the rest and names the gap; restarts itself once a probe finds the kind readable | `Observed: False/CacheNotSynced` when the gap is a permission |
 | No `Estate` is declared | reports the cluster facts with `declared: null` and one `NoEstate` drift | — |
+| Its own image does not verify (a signature by none of the rendered keys, or by a key revoked before the signature's timestamp) | keeps observing and reporting; `status.selfVerification` and the report's `operator.selfVerification` carry the verdict, kid, timestamp and reason | `Observed: False/SelfVerificationFailed` |
+| Its own image cannot be checked (no keys rendered, the registry unreachable or refusing the estate's identity) | `status.selfVerification.signature: unverified` with the reason (`no-keys`, `registry-auth`, `registry-unreachable`…); checked again next interval | — |
 | No reconcile completes in 3 × interval, or the caches do not sync within 5m | exits non-zero; the kubelet restarts it (there is no probe port) | — |
 
 ## Flags — what the estate's render sets
@@ -127,13 +129,14 @@ registers. Deleting the binding stops the reports: `Reported` reads `False/Unbou
 | `--iam-url` | — (required) | IAM's issuer URL, e.g. `https://id.tequila.dev` — an https origin under `tequila.dev` |
 | `--console-url` | — (required) | `https://console.tequila.dev` |
 | `--iam-token-file` | `/var/run/tequila/iam/token` | the projected token (audience = `--iam-url`) |
-| `--signing-keys` | `/etc/tq-operator/signing-keys.json` | the rendered public keys (an empty list at this rung) |
+| `--signing-keys` | `/etc/tq-operator/signing-keys.json` | the platform's public signing keys, rendered from the catalogue's signing-key list (an empty list until signing ships) |
+| `--signer-kid` | `$TQ_OPERATOR_SIGNER_KID` | the key the catalogue names as this release's signer — tried first when verifying the operator's own image; every rendered key after |
 | `--allow-any-host` | `false` | accept URLs outside `tequila.dev` (a dev VM's `*.<slug>.test`) |
 | `--report-own-services` | `true` | the render's switch; `spec.operator.report.ownServices` must allow it too |
 | `--namespace` | `$POD_NAMESPACE`, else `tq-operator` | the operator's own namespace |
 | `--platform-namespace` / `--services-namespace` | `operations` / `tequila` | the environment's namespaces — the same values as the `Estate`'s `spec.namespaces` |
 | `--flux-namespace` | `flux-system` | where Flux's Kustomizations, sources and FluxInstance live |
-| `--image` | `$TQ_OPERATOR_IMAGE` | the operator's own image reference (reported) |
+| `--image` | `$TQ_OPERATOR_IMAGE` | the operator's own image reference (reported, and verified against the signing keys) |
 | `--zap-log-level`, `--zap-encoder`, … | | controller-runtime's logging flags |
 
 [config/](config/) holds the kustomize bases the estate's render mirrors:

@@ -209,6 +209,8 @@ check O10 "drift is exactly NotReady tequila/crasher + Undeclared tequila/ghost-
 check O11 "who attached never reaches the status (the annotation's value is dropped before the cache)" status_never_names_who_attached
 check O12 "a workload carries only the schema's keys" \
     jqc '[.status.running.workloads[] | keys[]] | unique - ["crashLooping","images","kind","name","namespace","replicas","restarts","service","state","undeclared"] | length == 0'
+check O13 "self-verification ran and stays unverified here (no signing keys rendered, no registry): no kid, no timestamp, a checkedAt" \
+    jqc '.status.selfVerification | .signature == "unverified" and .reason == "no-keys" and .kid == null and .timestamp == null and (.checkedAt | length > 0)'
 
 ################################################################################################
 echo

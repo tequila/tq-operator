@@ -26,6 +26,7 @@ type Options struct {
 	ServicesNamespace string
 	FluxNamespace     string
 	Image             string
+	SignerKid         string
 }
 
 // Defaults of the paths the unit mounts.
@@ -34,8 +35,9 @@ const (
 	DefaultSigningKeys  = "/etc/tq-operator/signing-keys.json"
 )
 
-// Bind registers the flags. The operator's own namespace and image default to POD_NAMESPACE and
-// TQ_OPERATOR_IMAGE (the downward API cannot expose an image; the render sets both).
+// Bind registers the flags. The operator's own namespace, image and signer default to
+// POD_NAMESPACE, TQ_OPERATOR_IMAGE and TQ_OPERATOR_SIGNER_KID (the downward API cannot expose an
+// image; the render sets them).
 func (o *Options) Bind(fs *flag.FlagSet) {
 	fs.DurationVar(&o.Interval, "interval", 15*time.Minute, "the report heartbeat and status resync (spec.operator.report.interval overrides the heartbeat)")
 	fs.StringVar(&o.IAMURL, "iam-url", "", "IAM's issuer URL — where the projected token is exchanged (https://id.tequila.dev)")
@@ -48,7 +50,8 @@ func (o *Options) Bind(fs *flag.FlagSet) {
 	fs.StringVar(&o.PlatformNamespace, "platform-namespace", "operations", "the environment's platform namespace")
 	fs.StringVar(&o.ServicesNamespace, "services-namespace", "tequila", "the environment's services namespace")
 	fs.StringVar(&o.FluxNamespace, "flux-namespace", "flux-system", "the namespace Flux's Kustomizations, sources and FluxInstance live in")
-	fs.StringVar(&o.Image, "image", os.Getenv("TQ_OPERATOR_IMAGE"), "the operator's own image reference, as rendered (reported)")
+	fs.StringVar(&o.Image, "image", os.Getenv("TQ_OPERATOR_IMAGE"), "the operator's own image reference, as rendered (reported and self-verified)")
+	fs.StringVar(&o.SignerKid, "signer-kid", os.Getenv("TQ_OPERATOR_SIGNER_KID"), "the kid of the signing key the catalogue names for this release — tried first; every rendered key after")
 }
 
 var dnsLabel = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)

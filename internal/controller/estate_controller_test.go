@@ -34,6 +34,7 @@ import (
 	"github.com/tequila/tq-operator/internal/observe"
 	"github.com/tequila/tq-operator/internal/report"
 	"github.com/tequila/tq-operator/internal/schemagen"
+	"github.com/tequila/tq-operator/internal/supplychain"
 )
 
 // The envtest suite: a real API server and etcd (no kubelet, no controllers), the Estate CRD
@@ -275,7 +276,25 @@ func estate() *estatev1alpha1.Estate {
 	}
 }
 
-func startManager(t *testing.T, env *envtest.Environment, scheme *runtime.Scheme, fake *fakeTequila) {
+// selfCheck is what the operator's self-verification answers in the test: swapped mid-test.
+type selfCheck struct {
+	mu     sync.Mutex
+	result supplychain.Result
+}
+
+func (s *selfCheck) set(r supplychain.Result) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.result = r
+}
+
+func (s *selfCheck) current() supplychain.Result {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.result
+}
+
+func startManager(t *testing.T, env *envtest.Environment, scheme *runtime.Scheme, fake *fakeTequila, self *selfCheck) {
 	t.Helper()
 	direct, err := client.New(env.Config, client.Options{Scheme: scheme})
 	must(t, err)
@@ -315,7 +334,8 @@ func startManager(t *testing.T, env *envtest.Environment, scheme *runtime.Scheme
 		Recorder: mgr.GetEventRecorderFor("tq-operator"), //nolint:staticcheck // core/v1 Events, as in cmd/main.go
 		Config: controller.Config{
 			Namespaces: namespaces, Interval: 15 * time.Minute, ReportOwnServices: true,
-			Operator: report.Operator{Version: "0.1.0", Image: "registry.tequila.dev/platform/tq-operator:v0.1.0", Capabilities: []estatev1alpha1.Capability{"observe"}},
+			Operator:         report.Operator{Version: "0.1.0", Image: "registry.tequila.dev/platform/tq-operator:v0.1.0", Capabilities: []estatev1alpha1.Capability{"observe"}},
+			SelfVerification: self.current,
 		},
 	}
 	must(t, r.SetupWithManager(mgr, kinds))
@@ -370,12 +390,18 @@ func TestEstateReconcilerObservesComparesAndReports(t *testing.T) {
 		Message: "left by an earlier build", LastTransitionTime: metav1.Now()}}
 	must(t, c.Status().Update(ctx, first))
 	fake := newFakeTequila(t)
-	startManager(t, env, scheme, fake)
+	checkedAt := time.Date(2026, 10, 12, 9, 0, 0, 0, time.UTC)
+	self := &selfCheck{result: supplychain.Result{Signature: supplychain.Unverified, CheckedAt: checkedAt, Reason: supplychain.ReasonNoKeys, Message: "no keys"}}
+	startManager(t, env, scheme, fake, self)
 
 	est := waitFor(t, c, "Reported: True", func(e *estatev1alpha1.Estate) bool {
 		r := condition(e, controller.ConditionReported)
 		return r != nil && r.Status == metav1.ConditionTrue
 	})
+	// The self-verification is in the status and in the report's operator block, the same.
+	if sv := est.Status.SelfVerification; sv == nil || sv.Signature != "unverified" || sv.Reason != "no-keys" || sv.Kid != nil || sv.Timestamp != nil || !sv.CheckedAt.Time.Equal(checkedAt) {
+		t.Errorf("status.selfVerification = %+v", sv)
+	}
 
 	// Conditions: Observed (never Ready), each recording the generation it was set for.
 	neverGatesFlux(t, c)
@@ -493,6 +519,11 @@ func TestEstateReconcilerObservesComparesAndReports(t *testing.T) {
 			t.Errorf("report.%s differs from status.%s:\n%s\n%s", block, block, sent[block], status[block])
 		}
 	}
+	var sentOperator map[string]json.RawMessage
+	must(t, json.Unmarshal(sent["operator"], &sentOperator))
+	if string(compact(t, sentOperator["selfVerification"])) != string(compact(t, status["selfVerification"])) {
+		t.Errorf("report.operator.selfVerification differs from status.selfVerification:\n%s\n%s", sentOperator["selfVerification"], status["selfVerification"])
+	}
 
 	// Events on the Estate tell the story.
 	var events corev1.EventList
@@ -550,6 +581,49 @@ func TestEstateReconcilerObservesComparesAndReports(t *testing.T) {
 	if len(est.Status.Running.Workloads) != 6 {
 		t.Error("status must still be written while the console is down")
 	}
+
+	// The operator's own image fails its check: Observed turns False/SelfVerificationFailed with
+	// the check's message, the status carries the verdict — and the operator keeps observing
+	// and reporting (the console is back; the next report is accepted).
+	fake.mu.Lock()
+	fake.unavail = false
+	fake.mu.Unlock()
+	kid := "0123456789abcdef"
+	self.set(supplychain.Result{Signature: supplychain.Invalid, CheckedAt: checkedAt.Add(time.Hour), Reason: supplychain.ReasonKeyRevoked,
+		Message: "registry.tequila.dev/platform/tq-operator:v0.1.0 does not verify (key-revoked): the signature was timestamped after key " + kid + " was revoked"})
+	must(t, c.Get(ctx, types.NamespacedName{Namespace: "tq-operator", Name: "prod"}, est))
+	svc = est.Spec.Services["iam"]
+	svc.Version = "v0.45.6"
+	est.Spec.Services["iam"] = svc
+	must(t, c.Update(ctx, est))
+	est = waitFor(t, c, "Observed: False/SelfVerificationFailed", func(e *estatev1alpha1.Estate) bool {
+		r := condition(e, controller.ConditionObserved)
+		return r != nil && r.Reason == controller.ReasonSelfVerificationFailed
+	})
+	if r := condition(est, controller.ConditionObserved); r.Status != metav1.ConditionFalse || !strings.Contains(r.Message, "key-revoked") || r.ObservedGeneration != est.Generation {
+		t.Errorf("Observed = %+v (generation %d)", r, est.Generation)
+	}
+	if sv := est.Status.SelfVerification; sv == nil || sv.Signature != "invalid" || sv.Reason != "key-revoked" {
+		t.Errorf("status.selfVerification = %+v", sv)
+	}
+	est = waitFor(t, c, "Reported: True after the failed self-check", func(e *estatev1alpha1.Estate) bool {
+		r := condition(e, controller.ConditionReported)
+		return r != nil && r.Status == metav1.ConditionTrue
+	})
+	if len(est.Status.Running.Workloads) != 6 {
+		t.Error("a failed self-check must not stop observation")
+	}
+	lastBody, _, _ := fake.last()
+	var last map[string]json.RawMessage
+	must(t, json.Unmarshal(lastBody, &last))
+	var lastOperator struct {
+		SelfVerification estatev1alpha1.SelfVerification `json:"selfVerification"`
+	}
+	must(t, json.Unmarshal(last["operator"], &lastOperator))
+	if lastOperator.SelfVerification.Signature != "invalid" || lastOperator.SelfVerification.Reason != "key-revoked" {
+		t.Errorf("the report after the failed self-check says %+v", lastOperator.SelfVerification)
+	}
+	neverGatesFlux(t, c)
 }
 
 func compact(t *testing.T, raw json.RawMessage) []byte {

@@ -5,7 +5,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"reflect"
+	"time"
 	"unicode/utf8"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	estatev1alpha1 "github.com/tequila/tq-operator/api/v1alpha1"
 )
@@ -94,6 +97,16 @@ func Normalize(r *Report) {
 		r.Operator.Capabilities = []estatev1alpha1.Capability{}
 	}
 	r.Operator.Capabilities = capSlice(r.Operator.Capabilities, 4)
+	if sv := &r.Operator.SelfVerification; sv.Signature == "" {
+		sv.Signature = "unverified"
+		if sv.Reason == "" {
+			sv.Reason = "not-checked"
+		}
+	}
+	if r.Operator.SelfVerification.CheckedAt.IsZero() {
+		// Never checked: the epoch, so the value is a date-time and the report's hash is stable.
+		r.Operator.SelfVerification.CheckedAt = metav1.NewTime(time.Unix(0, 0).UTC())
+	}
 	n := &r.Cluster.Nodes
 	n.Architectures = capSlice(orEmpty(n.Architectures), MaxArchitectures)
 	n.KubeletVersions = capSlice(orEmpty(n.KubeletVersions), MaxKubeletVersions)
