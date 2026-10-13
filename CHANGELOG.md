@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/tequila/tq-operator/compare/v0.2.0...v0.3.0) (2026-10-13)
+
+
+### Features
+
+* **supplychain:** the operator verifies its own image against the rendered signing keys ([#6](https://github.com/tequila/tq-operator/issues/6)) ([5d7223f](https://github.com/tequila/tq-operator/commit/5d7223f53ff62766355dc3894981f14fb86fb6bc))
+
 ## [0.2.0](https://github.com/tequila/tq-operator/compare/v0.1.0...v0.2.0) (2026-10-09)
 
 
