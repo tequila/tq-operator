@@ -201,6 +201,7 @@ var optionalSince = []string{
 	"/applied/kustomizations/[]/attached",
 	"/running/workloads/[]/state",
 	"/running/workloads/[]/undeclared",
+	"/operator/selfVerification",
 	"/running/workloads/[]/crashLooping",
 	"/running/workloads/[]/restarts",
 }

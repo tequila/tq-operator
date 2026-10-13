@@ -656,6 +656,54 @@ spec:
                 - truncated
                 - workloads
                 type: object
+              selfVerification:
+                description: |-
+                  SelfVerification is the operator's check of its own image against the rendered signing
+                  keys; absent until the first check completed.
+                properties:
+                  checkedAt:
+                    description: CheckedAt is when the check ran.
+                    format: date-time
+                    type: string
+                  kid:
+                    description: Kid is the signing key the signature verified with;
+                      null otherwise.
+                    nullable: true
+                    type: string
+                  reason:
+                    description: |-
+                      Reason is one word for how the check ended: verified, no-keys, no-image, registry-auth,
+                      registry-unreachable, unsigned, no-matching-key, payload-mismatch, key-revoked,
+                      key-not-yet-valid, timestamp-invalid, malformed-signature.
+                    maxLength: 64
+                    type: string
+                  signature:
+                    description: |-
+                      Signature: valid — a signature by one of the rendered keys, timestamped (when a timestamp
+                      is carried) before that key's revocation; invalid — a signature that does not verify, or
+                      one by a key revoked before the signature's timestamp; unsigned — the registry holds no
+                      signature for the image's digest; unverified — no verdict (no keys rendered, no image
+                      reference, the registry unreachable or refusing the operator's identity).
+                    enum:
+                    - unverified
+                    - valid
+                    - invalid
+                    - unsigned
+                    type: string
+                  timestamp:
+                    description: |-
+                      Timestamp is the RFC 3161 time the signature carries, verified against the key's
+                      timestamp-authority chain; null when the signature carries none or no verdict was reached.
+                    format: date-time
+                    nullable: true
+                    type: string
+                required:
+                - checkedAt
+                - kid
+                - reason
+                - signature
+                - timestamp
+                type: object
             type: object
         required:
         - spec

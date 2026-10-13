@@ -27,6 +27,9 @@ const (
 	tokenTypeJWT           = "urn:ietf:params:oauth:token-type:jwt"            //nolint:gosec // G101: an RFC 8693 URN
 	// Audience is the console's audience at IAM.
 	Audience = "tenancy"
+	// RegistryAudience is the container registry's audience at IAM: the token the registry's
+	// realm takes as a password, for the operator to read its own image's signature.
+	RegistryAudience = "packages"
 	// tokenRefreshMargin: a cached token is re-exchanged this long before it expires.
 	tokenRefreshMargin = 60 * time.Second
 	// maxAnswerBytes caps what is read of any answer.
@@ -42,23 +45,32 @@ const (
 	TotalTimeout   = 30 * time.Second
 )
 
-// NewHTTPClient is the operator's one HTTP client: TLS verified against the system roots, no
-// proxy taken from the environment (the operator speaks to its two configured hosts and no
-// third), redirects never followed (a redirect to another host would be a third), bounded.
+// NewHTTPClient is the operator's HTTP client for IAM and the console: TLS verified against the
+// system roots, no proxy taken from the environment (the operator speaks to its configured
+// hosts and no other), redirects never followed (a redirect to another host would be another
+// host), bounded.
 func NewHTTPClient() *http.Client {
 	return &http.Client{
-		Timeout: TotalTimeout,
-		Transport: &http.Transport{
-			Proxy:                 nil,
-			DialContext:           (&net.Dialer{Timeout: ConnectTimeout, KeepAlive: 30 * time.Second}).DialContext,
-			TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
-			TLSHandshakeTimeout:   ConnectTimeout,
-			ResponseHeaderTimeout: TotalTimeout,
-			ForceAttemptHTTP2:     true,
-			MaxIdleConns:          2,
-			IdleConnTimeout:       90 * time.Second,
-		},
+		Timeout:       TotalTimeout,
+		Transport:     NewTransport(),
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+}
+
+// NewTransport is the operator's one transport shape: TLS 1.2 or better against the system
+// roots, no proxy from the environment, a 10 s connect and a 30 s wait for headers. The
+// registry client shares it (a registry may redirect a blob to its storage, so that client
+// follows redirects where this package's does not).
+func NewTransport() *http.Transport {
+	return &http.Transport{
+		Proxy:                 nil,
+		DialContext:           (&net.Dialer{Timeout: ConnectTimeout, KeepAlive: 30 * time.Second}).DialContext,
+		TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
+		TLSHandshakeTimeout:   ConnectTimeout,
+		ResponseHeaderTimeout: TotalTimeout,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          2,
+		IdleConnTimeout:       90 * time.Second,
 	}
 }
 
@@ -104,7 +116,8 @@ func (r Result) Reason() string {
 	}
 }
 
-// Client exchanges the projected token at IAM and puts reports at the console.
+// Client exchanges the projected token at IAM — for the console's audience and for the
+// registry's — and puts reports at the console.
 type Client struct {
 	IAM       *url.URL
 	Console   *url.URL
@@ -112,7 +125,12 @@ type Client struct {
 	HTTP      *http.Client
 	Now       func() time.Time
 
-	mu       sync.Mutex
+	mu     sync.Mutex
+	tokens map[string]exchanged
+}
+
+// exchanged is one cached token of one audience.
+type exchanged struct {
 	token    string
 	expires  time.Time
 	identity Identity
@@ -121,13 +139,21 @@ type Client struct {
 // Identity returns the estate identity and a token for the console, exchanging the projected
 // ServiceAccount token at IAM when no cached token has more than a minute left.
 func (c *Client) Identity(ctx context.Context) (Identity, string, *Result) {
+	return c.Exchange(ctx, Audience)
+}
+
+// Exchange returns the estate identity and a token for audience, exchanging the projected
+// ServiceAccount token at IAM when no cached token of that audience has more than a minute
+// left. An audience IAM does not grant the estate is a Refused result, never a retry here: the
+// caller's own rhythm decides when to ask again.
+func (c *Client) Exchange(ctx context.Context, audience string) (Identity, string, *Result) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	now := c.now()
-	if c.token != "" && now.Add(tokenRefreshMargin).Before(c.expires) {
-		return c.identity, c.token, nil
+	if cached, ok := c.tokens[audience]; ok && cached.token != "" && now.Add(tokenRefreshMargin).Before(cached.expires) {
+		return cached.identity, cached.token, nil
 	}
-	c.token, c.expires, c.identity = "", time.Time{}, Identity{}
+	delete(c.tokens, audience)
 
 	subject, err := readTokenFile(c.TokenFile)
 	if err != nil {
@@ -137,7 +163,7 @@ func (c *Client) Identity(ctx context.Context) (Identity, string, *Result) {
 		"grant_type":         {grantTypeTokenExchange},
 		"subject_token":      {subject},
 		"subject_token_type": {tokenTypeJWT},
-		"audience":           {Audience},
+		"audience":           {audience},
 	}
 	endpoint := c.IAM.JoinPath("oauth", "token")
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), strings.NewReader(form.Encode()))
@@ -170,8 +196,11 @@ func (c *Client) Identity(ctx context.Context) (Identity, string, *Result) {
 		if answer.ExpiresIn <= 0 || (!exp.IsZero() && exp.Before(expires)) {
 			expires = exp
 		}
-		c.token, c.expires, c.identity = answer.AccessToken, expires, id
-		return id, c.token, nil
+		if c.tokens == nil {
+			c.tokens = map[string]exchanged{}
+		}
+		c.tokens[audience] = exchanged{token: answer.AccessToken, expires: expires, identity: id}
+		return id, answer.AccessToken, nil
 	}
 
 	code, description := oauthError(body)
@@ -241,7 +270,7 @@ func (c *Client) Put(ctx context.Context, id Identity, token string, body []byte
 func (c *Client) forgetToken() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.token, c.expires, c.identity = "", time.Time{}, Identity{}
+	delete(c.tokens, Audience)
 }
 
 func (c *Client) now() time.Time {

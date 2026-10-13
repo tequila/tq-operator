@@ -201,6 +201,10 @@ type EstateStatus struct {
 	Health *HealthStatus `json:"health,omitempty"`
 	// +optional
 	LastReport *LastReport `json:"lastReport,omitempty"`
+	// SelfVerification is the operator's check of its own image against the rendered signing
+	// keys; absent until the first check completed.
+	// +optional
+	SelfVerification *SelfVerification `json:"selfVerification,omitempty"`
 }
 
 // ClusterStatus is what the cluster says of itself.
@@ -417,6 +421,33 @@ type LastReport struct {
 	// Status is the HTTP status of the answer; absent when nothing answered.
 	// +optional
 	Status int32 `json:"status,omitempty"`
+}
+
+// SelfVerification is the outcome of the operator verifying its own image's signature against
+// the signing keys its render carried (the ConfigMap the catalogue's signing-key list is
+// rendered into). Shared with the report's operator block.
+type SelfVerification struct {
+	// Signature: valid — a signature by one of the rendered keys, timestamped (when a timestamp
+	// is carried) before that key's revocation; invalid — a signature that does not verify, or
+	// one by a key revoked before the signature's timestamp; unsigned — the registry holds no
+	// signature for the image's digest; unverified — no verdict (no keys rendered, no image
+	// reference, the registry unreachable or refusing the operator's identity).
+	// +kubebuilder:validation:Enum=unverified;valid;invalid;unsigned
+	Signature string `json:"signature"`
+	// Kid is the signing key the signature verified with; null otherwise.
+	// +nullable
+	Kid *string `json:"kid"`
+	// Timestamp is the RFC 3161 time the signature carries, verified against the key's
+	// timestamp-authority chain; null when the signature carries none or no verdict was reached.
+	// +nullable
+	Timestamp *metav1.Time `json:"timestamp"`
+	// CheckedAt is when the check ran.
+	CheckedAt metav1.Time `json:"checkedAt"`
+	// Reason is one word for how the check ended: verified, no-keys, no-image, registry-auth,
+	// registry-unreachable, unsigned, no-matching-key, payload-mismatch, key-revoked,
+	// key-not-yet-valid, timestamp-invalid, malformed-signature.
+	// +kubebuilder:validation:MaxLength=64
+	Reason string `json:"reason"`
 }
 
 // +kubebuilder:object:root=true

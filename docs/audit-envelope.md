@@ -203,20 +203,44 @@ The image is a single static binary (`CGO_ENABLED=0`) on `gcr.io/distroless/stat
 for linux/amd64 and linux/arm64. Its base image is pinned by digest in the `Dockerfile`, which only
 copies the binary; the same binaries are attached to the GitHub Release with `SHA256SUMS`.
 
-**Pending (a later release, with the signed-image catalogue):**
+**The operator verifies its own image.** At start and then once per interval it reads the
+signature the registry holds beside its image (the `sha256-<digest>.sig` tag cosign writes),
+verifies it with the platform's public signing keys its render mounted (`signing-keys.json`,
+the catalogue's signing-key list), checks the signature's RFC 3161 timestamp against the key's
+timestamp-authority chain, and writes the verdict:
 
-- the image signed with the platform's KMS key and an RFC 3161 timestamp;
-- SLSA provenance and an SPDX SBOM;
-- the render pinning the image by digest.
+```bash
+kubectl -n tq-operator get estate "$ENV" -o jsonpath='{.status.selfVerification}{"\n"}'
+kubectl -n tq-operator get configmap tq-operator-signing-keys -o jsonpath='{.data.signing-keys\.json}{"\n"}'
+```
 
-Until then, the image is pinned by tag and `signature` reads `unverified` for every image in the
-report, the operator's own included. When signing ships:
+**Expect:** `{"signature":"valid","kid":"<the signer's kid>","timestamp":"<the signing time>",
+"checkedAt":"…","reason":"verified"}` once the render carries keys and the image is signed.
+The verdicts: `valid` (a signature by one of the rendered keys, timestamped before that key's
+revocation when it is timestamped at all), `invalid` (a signature by none of them, or by a key
+revoked before the timestamp — then the `Observed` condition reads `False/SelfVerificationFailed`
+and the operator **keeps observing and reporting**, which is the one fact it must not withhold),
+`unsigned` (no signature beside the image) and `unverified` with a reason: `no-keys` (an empty
+list rendered), `registry-auth` (the registry refuses the estate's identity: the operator
+presents its projected token exchanged for the registry's audience, and nothing else — no pull
+Secret is mounted), `registry-unreachable`. The report's `operator.selfVerification` carries the
+same block, so the console shows what the cluster shows. The operator fetches no key at run time
+and reaches no host but the registry its image came from.
+
+**Pending (a later release):** SLSA provenance and an SPDX SBOM verified the same way; the render
+pinning the image by digest.
+
+Verify the same thing by hand, with the key from the catalogue's signing-key list:
 
 ```bash
 cosign verify --key tequila-release.pub --insecure-ignore-tlog=true --use-signed-timestamps \
   --timestamp-certificate-chain tsa-chain.pem registry.tequila.dev/platform/tq-operator@sha256:…
 cosign verify-attestation --key tequila-release.pub --type slsaprovenance1 registry.tequila.dev/platform/tq-operator@sha256:…
 ```
+
+`--insecure-ignore-tlog` only says that no public transparency log holds this signature: the
+platform signs with a KMS-backed key and a signed timestamp, which is what the chain above
+checks, and every signature is on the key's own audit record.
 
 ## 7. You control it — met
 

@@ -34,6 +34,7 @@ import (
 	estatev1alpha1 "github.com/tequila/tq-operator/api/v1alpha1"
 	"github.com/tequila/tq-operator/internal/observe"
 	"github.com/tequila/tq-operator/internal/report"
+	"github.com/tequila/tq-operator/internal/supplychain"
 )
 
 // Condition types and reasons of Estate.status.conditions. None is Ready: Flux's health check
@@ -64,10 +65,20 @@ type Config struct {
 	ReportOwnServices bool
 	// Operator is the reporting operator's identity in the report.
 	Operator report.Operator
-	// SelfVerification is the result of the operator's check of its own image; a failure
-	// is an Observed: False condition and continued operation — the operator never stops observing
-	// because of its own supply chain.
-	SelfVerification func() (ok bool, message string)
+	// SelfVerification is the latest result of the operator's check of its own image (the
+	// checker's Current); nil when the operator runs without one. A failed check is an
+	// Observed: False condition, status.selfVerification and the report's operator block say
+	// so, and the operator keeps observing — it never stops because of its own supply chain.
+	SelfVerification func() supplychain.Result
+}
+
+// operator is the report's operator block with the self-verification of the moment.
+func (c Config) operator() report.Operator {
+	op := c.Operator
+	if c.SelfVerification != nil {
+		op.SelfVerification = c.SelfVerification().Status()
+	}
+	return op
 }
 
 // Beater is told when a reconcile completed (the watchdog).
@@ -114,6 +125,10 @@ func (r *EstateReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	keepOwnConditions(next)
 	next.Cluster, next.Applied, next.Running = observed.Cluster, observed.Applied, observed.Running
 	next.ExternalSecrets, next.Drift, next.Preflight, next.Health = observed.ExternalSecrets, observed.Drift, nil, observed.Health
+	if r.Config.SelfVerification != nil {
+		sv := r.Config.SelfVerification().Status()
+		next.SelfVerification = &sv
+	}
 
 	r.setObserved(next, &est, obs, now)
 	reason, message := summarize(observed.Drift)
@@ -121,7 +136,7 @@ func (r *EstateReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	nextDue := now.Add(interval)
 	if boolOr(est.Spec.Operator.Report.Enabled, true) {
-		payload := report.Assemble(&est, &observed, r.Config.Operator)
+		payload := report.Assemble(&est, &observed, r.Config.operator())
 		attempt, due := r.Reporter.Report(ctx, req.String(), payload, est.Spec.Environment, interval)
 		if attempt.Attempted {
 			res := attempt.Result
@@ -165,8 +180,8 @@ func (r *EstateReconciler) setObserved(st *estatev1alpha1.EstateStatus, est *est
 		return
 	}
 	if r.Config.SelfVerification != nil {
-		if ok, msg := r.Config.SelfVerification(); !ok {
-			setCondition(st, ConditionObserved, false, ReasonSelfVerificationFailed, msg, est.Generation, now)
+		if self := r.Config.SelfVerification(); !self.OK() {
+			setCondition(st, ConditionObserved, false, ReasonSelfVerificationFailed, self.Message, est.Generation, now)
 			return
 		}
 	}

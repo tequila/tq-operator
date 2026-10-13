@@ -84,7 +84,7 @@ func (l *NoEstateLoop) once(ctx context.Context) {
 	scope := observe.Scope{Platform: l.Config.Namespaces.Platform, Services: l.Config.Namespaces.Services}
 	obs := l.Observer.Observe(ctx, scope)
 	st := Observed(nil, obs, scope, l.Config.ReportOwnServices)
-	attempt, next := l.Reporter.Report(ctx, report.NoEstateKey, report.Assemble(nil, &st, l.Config.Operator), "", l.Config.Interval)
+	attempt, next := l.Reporter.Report(ctx, report.NoEstateKey, report.Assemble(nil, &st, l.Config.operator()), "", l.Config.Interval)
 	if attempt.Attempted {
 		log.Info("report without an Estate", "outcome", attempt.Result.Outcome, "status", attempt.Result.Status,
 			"code", attempt.Result.Code, "message", attempt.Result.Message, "next", next.UTC().Format(time.RFC3339))

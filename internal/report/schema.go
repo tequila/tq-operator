@@ -75,6 +75,11 @@ type Operator struct {
 	// Capabilities is the rungs this operator runs.
 	// +kubebuilder:validation:MaxItems=4
 	Capabilities []estatev1alpha1.Capability `json:"capabilities"`
+	// SelfVerification is the operator's check of its own image against the rendered signing
+	// keys — Estate.status.selfVerification. Added after the schema's first release: optional
+	// in the schema, always sent.
+	// +optional
+	SelfVerification estatev1alpha1.SelfVerification `json:"selfVerification"`
 }
 
 // Declared echoes the Estate's spec — the declared state the observation was compared with.

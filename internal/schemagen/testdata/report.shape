@@ -74,6 +74,12 @@
 /operator/capabilities array maxItems=4                     # the ladder has four rungs
 /operator/capabilities/[] string enum=observe|verify|gate|act
 /operator/image string
+/operator/selfVerification object optional                  # the operator's check of its own image, as status.selfVerification
+/operator/selfVerification/checkedAt string format=date-time
+/operator/selfVerification/kid string|null                  # the key that verified it; null unless valid
+/operator/selfVerification/reason string
+/operator/selfVerification/signature string enum=unverified|valid|invalid|unsigned
+/operator/selfVerification/timestamp string|null format=date-time   # the signature's verified RFC 3161 time; null when it carries none
 /operator/version string
 /preflight array maxItems=0                                 # "[] at observe": no item may be carried
 /reportedAt string format=date-time

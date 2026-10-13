@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -122,14 +123,21 @@ func run(opts options.Options) int {
 		},
 	}
 	started := time.Now()
-	reporter := &report.Reporter{
-		Client: &report.Client{
-			IAM: iamURL, Console: consoleURL, TokenFile: opts.IAMTokenFile, HTTP: report.NewHTTPClient(),
-		},
-		Started: started,
+	iamClient := &report.Client{
+		IAM: iamURL, Console: consoleURL, TokenFile: opts.IAMTokenFile, HTTP: report.NewHTTPClient(),
 	}
-	self := supplychain.SelfVerify(opts.Image, opts.SigningKeys)
-	log.Info("self-verification", "signature", self.Signature, "keys", self.Keys, "message", self.Message)
+	reporter := &report.Reporter{Client: iamClient, Started: started}
+
+	// The self-check: the rendered keys, the image's signature from its registry (the
+	// projected token exchanged at IAM for the registry's audience is the registry's
+	// password), once now and then once per interval. Every outcome is a status, never an exit.
+	checker := &supplychain.Checker{
+		Verify:   selfVerifier(opts, iamClient, log),
+		Image:    opts.Image,
+		Interval: opts.Interval,
+		Log:      log.WithName("self-verification"),
+	}
+	checker.Run(ctx)
 	cfgCommon := controller.Config{
 		Namespaces:        namespaces,
 		Interval:          opts.Interval,
@@ -139,7 +147,7 @@ func run(opts options.Options) int {
 			Image:        opts.Image,
 			Capabilities: []estatev1alpha1.Capability{estatev1alpha1.CapabilityObserve},
 		},
-		SelfVerification: func() (bool, string) { return self.OK(), self.Message },
+		SelfVerification: checker.Current,
 	}
 
 	wd := &watchdog.Watchdog{
@@ -181,7 +189,7 @@ func run(opts options.Options) int {
 	}
 	for _, runnable := range []interface {
 		Start(context.Context) error
-	}{loop, wd} {
+	}{loop, wd, checker} {
 		if err := mgr.Add(runnableFunc(runnable.Start)); err != nil {
 			log.Error(err, "runnable")
 			return exitFailure
@@ -198,6 +206,39 @@ func run(opts options.Options) int {
 		log.Info("stopped", "code", code, "reason", reason)
 	}
 	return code
+}
+
+// selfVerifier builds the check of the operator's own image: the signing keys the render
+// mounted (a file that fails to parse is a result, not a refusal to start) and a registry
+// client whose password is the projected token exchanged at IAM for the registry's audience.
+// An exchange IAM refuses is `unverified` with reason registry-auth — once per interval, never
+// a retry storm: the checker's rhythm is the only rhythm.
+func selfVerifier(opts options.Options, iam *report.Client, log logr.Logger) func(context.Context) supplychain.Result {
+	keys, keysErr := supplychain.LoadKeys(opts.SigningKeys)
+	if keysErr != nil {
+		log.Error(keysErr, "the signing-keys file is not usable; the operator's image stays unverified", "file", opts.SigningKeys)
+	}
+	verifier := &supplychain.Verifier{
+		Keys:      keys,
+		SignerKid: opts.SignerKid,
+		Transport: report.NewTransport(),
+		UserAgent: "tq-operator/" + version.Version,
+		Credential: func(ctx context.Context) (string, string, error) {
+			_, token, failed := iam.Exchange(ctx, report.RegistryAudience)
+			if failed != nil {
+				return "", failed.Message, errors.New(failed.Code)
+			}
+			return token, "", nil
+		},
+	}
+	return func(ctx context.Context) supplychain.Result {
+		if keysErr != nil {
+			r := supplychain.Result{Signature: supplychain.Unverified, CheckedAt: time.Now(), Reason: supplychain.ReasonKeysMalformed,
+				Message: "the signing-keys file is not usable: " + keysErr.Error()}
+			return r
+		}
+		return verifier.Verify(ctx, opts.Image)
+	}
 }
 
 // managerOptions are the manager's options: every one a choice from the audit envelope

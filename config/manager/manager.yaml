@@ -62,7 +62,7 @@ spec:
           projected:
             sources:
               - serviceAccountToken: { path: token, audience: https://id.tequila.dev, expirationSeconds: 3600 }
-        - name: signing-keys                   # the release catalogue's public keys, rendered — an empty list at rung observe
+        - name: signing-keys                   # the release catalogue's public keys, rendered — what the operator verifies its own image with; an empty list until signing ships
           configMap: { name: tq-operator-signing-keys, optional: true }
         - name: tmp
           emptyDir: { sizeLimit: 16Mi }
