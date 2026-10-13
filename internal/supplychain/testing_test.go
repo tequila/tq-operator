@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/digitorus/timestamp"
+	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/registry"
 	"github.com/google/go-containerregistry/pkg/v1/empty"
@@ -254,4 +255,22 @@ func keyEntryJSON(kid, pubPEM string, tsaChain string, revokedAt *time.Time) str
 	}
 	raw, _ := json.Marshal(e)
 	return string(raw)
+}
+
+// pushImageAuthenticated is pushImage against a registry that requires password.
+func (r *testRegistry) pushImageAuthenticated(t *testing.T, tag, password string) name.Digest {
+	t.Helper()
+	img, err := random.Image(256, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := append(r.opts(), remote.WithAuth(&authn.Basic{Username: RegistryUser, Password: password}))
+	if err := remote.Write(r.repo.Tag(tag), img, opts...); err != nil {
+		t.Fatal(err)
+	}
+	d, err := img.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r.repo.Digest(d.String())
 }

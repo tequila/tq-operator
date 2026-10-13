@@ -27,6 +27,7 @@ type Options struct {
 	FluxNamespace     string
 	Image             string
 	SignerKid         string
+	SignatureRegistry string
 }
 
 // Defaults of the paths the unit mounts.
@@ -52,13 +53,15 @@ func (o *Options) Bind(fs *flag.FlagSet) {
 	fs.StringVar(&o.FluxNamespace, "flux-namespace", "flux-system", "the namespace Flux's Kustomizations, sources and FluxInstance live in")
 	fs.StringVar(&o.Image, "image", os.Getenv("TQ_OPERATOR_IMAGE"), "the operator's own image reference, as rendered (reported and self-verified)")
 	fs.StringVar(&o.SignerKid, "signer-kid", os.Getenv("TQ_OPERATOR_SIGNER_KID"), "the kid of the signing key the catalogue names for this release — tried first; every rendered key after")
+	fs.StringVar(&o.SignatureRegistry, "signature-registry", "", "the registry host the operator's image signature is read from, under the image's repository path — where the image is a copy by digest (registry.tequila.dev); empty = the image's own registry")
 }
 
 var dnsLabel = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 
 // Validate checks the flags and returns the two endpoints. The operator refuses to start with
-// an IAM or console URL that is not https:// under tequila.dev unless --allow-any-host is set:
-// the NetworkPolicy cannot name a host, so the operator holds its two hosts itself.
+// an IAM or console URL that is not https:// under tequila.dev — or a signature registry not
+// under it — unless --allow-any-host is set: the NetworkPolicy cannot name a host, so the
+// operator holds its hosts itself.
 func (o *Options) Validate() (iam, console *url.URL, err error) {
 	var errs []error
 	if iam, err = o.endpoint("--iam-url", o.IAMURL); err != nil {
@@ -80,6 +83,11 @@ func (o *Options) Validate() (iam, console *url.URL, err error) {
 	}
 	if o.IAMTokenFile == "" {
 		errs = append(errs, errors.New("--iam-token-file is empty"))
+	}
+	if o.SignatureRegistry != "" {
+		if err := o.registryHost("--signature-registry", o.SignatureRegistry); err != nil {
+			errs = append(errs, err)
+		}
 	}
 	if err := errors.Join(errs...); err != nil {
 		return nil, nil, err
@@ -110,6 +118,20 @@ func (o *Options) endpoint(name, raw string) (*url.URL, error) {
 	}
 	u.Path = ""
 	return u, nil
+}
+
+// registryHost checks a registry flag: a bare host[:port] — no scheme, path or credentials —
+// under tequila.dev unless --allow-any-host.
+func (o *Options) registryHost(name, raw string) error {
+	u, err := url.Parse("https://" + raw)
+	if err != nil || strings.ContainsAny(raw, "/@?#") || u.Host != raw || u.Hostname() == "" {
+		return fmt.Errorf("%s %q is not a registry host (host[:port], no scheme or path)", name, raw)
+	}
+	host := strings.ToLower(u.Hostname())
+	if !o.AllowAnyHost && host != "tequila.dev" && !strings.HasSuffix(host, ".tequila.dev") {
+		return fmt.Errorf("%s %q is not under tequila.dev (set --allow-any-host for a dev estate)", name, raw)
+	}
+	return nil
 }
 
 func envOr(name, fallback string) string {

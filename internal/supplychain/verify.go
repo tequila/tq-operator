@@ -59,7 +59,14 @@ type Verifier struct {
 	// SignerKid, when set, is the key the catalogue names as this release's signer: tried
 	// first; every other key after.
 	SignerKid string
-	// Credential is how the verifier authenticates at the registry; nil means anonymously.
+	// SignatureRegistry, when set, is the registry host signatures are read from — and a tag
+	// resolved at — under the image's own repository path: the registry the image was copied
+	// from by digest. A signature covers a digest, never a registry, so a copy verifies with
+	// its source's signature, and an installation that mirrors images into a registry of its
+	// own needs no credential for that one. Empty = the image's own registry.
+	SignatureRegistry string
+	// Credential is how the verifier authenticates at the registry it reads from; nil means
+	// anonymously.
 	Credential Credential
 	// Transport is the registry client's transport (report.NewTransport in the operator).
 	Transport http.RoundTripper
@@ -82,6 +89,12 @@ func (v *Verifier) Verify(ctx context.Context, image string) Result {
 	if err != nil {
 		return unverified(image, ReasonBadImageReference, err.Error(), keys, now)
 	}
+	if v.SignatureRegistry != "" {
+		if ref, err = atRegistry(ref, v.SignatureRegistry); err != nil {
+			return unverified(image, ReasonBadImageReference, err.Error(), keys, now)
+		}
+	}
+	at := ref.Context().RegistryStr()
 	opts := []remote.Option{remote.WithContext(ctx)}
 	if v.Transport != nil {
 		opts = append(opts, remote.WithTransport(v.Transport))
@@ -99,16 +112,16 @@ func (v *Verifier) Verify(ctx context.Context, image string) Result {
 
 	digest, err := v.digestOf(ref, opts)
 	if err != nil {
-		return unverified(image, registryReason(err, ReasonImageNotFound), "resolving the image's digest: "+registryDetail(err), keys, now)
+		return unverified(image, registryReason(err, ReasonImageNotFound), "resolving the image's digest at "+at+": "+registryDetail(err), keys, now)
 	}
 	sigRef := ref.Context().Tag(strings.Replace(digest.String(), ":", "-", 1) + SignatureTagSuffix)
 	desc, err := remote.Get(sigRef, opts...)
 	if err != nil {
 		if statusOf(err) == http.StatusNotFound {
 			return Result{Signature: Unsigned, CheckedAt: now, Reason: ReasonUnsigned, Keys: keys,
-				Message: fmt.Sprintf("%s is unsigned: the registry holds no %s for %s", image, sigRef.TagStr(), digest)}
+				Message: fmt.Sprintf("%s is unsigned: %s holds no %s for %s", image, at, sigRef.TagStr(), digest)}
 		}
-		return unverified(image, registryReason(err, ReasonRegistryUnreachable), "reading the signature: "+registryDetail(err), keys, now)
+		return unverified(image, registryReason(err, ReasonRegistryUnreachable), "reading the signature at "+at+": "+registryDetail(err), keys, now)
 	}
 	sigImage, err := desc.Image()
 	if err != nil {
@@ -150,6 +163,18 @@ func (v *Verifier) Verify(ctx context.Context, image string) Result {
 
 // digestOf resolves the reference to the digest the signature is over: the reference's own
 // when it is pinned by digest, else what the registry serves for the tag now.
+// atRegistry is ref under another registry host: the same repository path, tag or digest.
+func atRegistry(ref name.Reference, host string) (name.Reference, error) {
+	repo, err := name.NewRepository(host+"/"+ref.Context().RepositoryStr(), name.StrictValidation)
+	if err != nil {
+		return nil, fmt.Errorf("the signature registry %q: %w", host, err)
+	}
+	if d, ok := ref.(name.Digest); ok {
+		return repo.Digest(d.DigestStr()), nil
+	}
+	return repo.Tag(ref.Identifier()), nil
+}
+
 func (v *Verifier) digestOf(ref name.Reference, opts []remote.Option) (v1.Hash, error) {
 	if d, ok := ref.(name.Digest); ok {
 		return v1.NewHash(d.DigestStr())

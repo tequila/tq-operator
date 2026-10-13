@@ -221,8 +221,11 @@ func selfVerifier(opts options.Options, iam *report.Client, log logr.Logger) fun
 	verifier := &supplychain.Verifier{
 		Keys:      keys,
 		SignerKid: opts.SignerKid,
-		Transport: report.NewTransport(),
-		UserAgent: "tq-operator/" + version.Version,
+		// Where the image is a copy (by digest) of the hosted registry's, the signature is read
+		// there, with the same token.
+		SignatureRegistry: opts.SignatureRegistry,
+		Transport:         report.NewTransport(),
+		UserAgent:         "tq-operator/" + version.Version,
 		Credential: func(ctx context.Context) (string, string, error) {
 			_, token, failed := iam.Exchange(ctx, report.RegistryAudience)
 			if failed != nil {
