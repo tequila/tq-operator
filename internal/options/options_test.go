@@ -65,3 +65,27 @@ func TestBoundsAndNames(t *testing.T) {
 		t.Errorf("got %v", err)
 	}
 }
+
+func TestTheSignatureRegistryIsABareTequilaHost(t *testing.T) {
+	base := []string{"--iam-url=https://id.tequila.dev", "--console-url=https://console.tequila.dev"}
+	for _, ok := range []string{"", "registry.tequila.dev", "registry.tequila.dev:443"} {
+		if _, _, err := parse(t, append(base, "--signature-registry="+ok)...).Validate(); err != nil {
+			t.Errorf("%q: %v", ok, err)
+		}
+	}
+	cases := map[string]string{
+		"https://registry.tequila.dev":                    "not a registry host",
+		"registry.tequila.dev/platform":                   "not a registry host",
+		"user@registry.tequila.dev":                       "not a registry host",
+		"registry.tequila.dev.evil.example":               "not under tequila.dev",
+		"123456789012.dkr.ecr.eu-central-1.amazonaws.com": "not under tequila.dev",
+	}
+	for raw, want := range cases {
+		if _, _, err := parse(t, append(base, "--signature-registry="+raw)...).Validate(); err == nil || !strings.Contains(err.Error(), "--signature-registry") || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: %v, want %q", raw, err, want)
+		}
+	}
+	if _, _, err := parse(t, append(base, "--signature-registry=registry.acme.test", "--allow-any-host")...).Validate(); err != nil {
+		t.Errorf("--allow-any-host: %v", err)
+	}
+}

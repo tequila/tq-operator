@@ -8,6 +8,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/go-containerregistry/pkg/authn"
+	"github.com/google/go-containerregistry/pkg/v1/remote"
 )
 
 var stampedAt = time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC)
@@ -245,3 +248,61 @@ func TestVerifyUnreachableRegistry(t *testing.T) {
 type roundTripper func(*http.Request) (*http.Response, error)
 
 func (f roundTripper) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// An installation that mirrors images into a registry of its own runs a copy, by digest, of the
+// hosted registry's image. The copy's registry takes no token of ours and holds no signature;
+// the hosted one holds both. With the signature registry set, the copy verifies with its
+// source's signature, by digest and by tag, and the copy's registry is never asked.
+func TestVerifyACopyReadsItsSignatureAtTheSignatureRegistry(t *testing.T) {
+	f := newFixture(t)
+	digest := f.reg.repo.Digest(strings.SplitN(f.image, "@", 2)[1])
+	f.reg.pushSignatures(t, digest, sign(t, f.reg.repo, digest.DigestStr(), mustECDSA(t, f.signer), f.tsa.stamp(t, stampedAt)))
+	f.reg.requirePassword("token-for-the-registry")
+
+	mirror := newTestRegistry(t)
+	desc, err := remote.Get(digest, append(f.reg.opts(), remote.WithAuth(&authn.Basic{Username: RegistryUser, Password: "token-for-the-registry"}))...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, err := desc.Image()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := remote.Write(mirror.repo.Tag("v1.0.0"), img, mirror.opts()...); err != nil {
+		t.Fatal(err)
+	}
+	mirror.requirePassword("an-aws-credential")
+	copyByDigest := mirror.repo.Digest(digest.DigestStr()).String()
+	copyByTag := mirror.repo.Tag("v1.0.0").String()
+
+	keys := keysJSON(keyEntryJSON(f.signer.kid, f.signer.pem, f.tsa.chainPEM, nil))
+	v := f.verifier(t, keys)
+	v.Credential = func(context.Context) (string, string, error) { return "token-for-the-registry", "", nil }
+
+	// Without it: the copy's registry refuses our token, and says so by name.
+	if r := v.Verify(context.Background(), copyByDigest); r.Signature != Unverified || r.Reason != ReasonRegistryAuth || !strings.Contains(r.Message, mirror.repo.RegistryStr()) {
+		t.Errorf("at the copy's registry: %+v", r)
+	}
+
+	v.SignatureRegistry = f.reg.repo.RegistryStr()
+	before := mirror.requestCount()
+	for name, ref := range map[string]string{"by digest": copyByDigest, "by tag": copyByTag} {
+		if r := v.Verify(context.Background(), ref); r.Signature != Valid || r.Kid != f.signer.kid || !r.Timestamp.Equal(stampedAt) {
+			t.Errorf("%s: %+v", name, r)
+		}
+	}
+	if n := mirror.requestCount() - before; n != 0 {
+		t.Errorf("the copy's registry was asked %d times", n)
+	}
+
+	// Unsigned there: the message names where the signature was looked for.
+	unsigned := f.reg.pushImageAuthenticated(t, "v2.0.0", "token-for-the-registry")
+	if r := v.Verify(context.Background(), mirror.repo.Digest(unsigned.DigestStr()).String()); r.Signature != Unsigned || !strings.Contains(r.Message, f.reg.repo.RegistryStr()+" holds no") {
+		t.Errorf("unsigned at the signature registry: %+v", r)
+	}
+
+	v.SignatureRegistry = "not a host!"
+	if r := v.Verify(context.Background(), copyByDigest); r.Signature != Unverified || r.Reason != ReasonBadImageReference {
+		t.Errorf("a signature registry that is no host: %+v", r)
+	}
+}

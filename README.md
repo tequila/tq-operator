@@ -131,6 +131,7 @@ registers. Deleting the binding stops the reports: `Reported` reads `False/Unbou
 | `--iam-token-file` | `/var/run/tequila/iam/token` | the projected token (audience = `--iam-url`) |
 | `--signing-keys` | `/etc/tq-operator/signing-keys.json` | the platform's public signing keys, rendered from the catalogue's signing-key list (an empty list until signing ships) |
 | `--signer-kid` | `$TQ_OPERATOR_SIGNER_KID` | the key the catalogue names as this release's signer — tried first when verifying the operator's own image; every rendered key after |
+| `--signature-registry` | — (the image's own registry) | the registry host the operator's image signature is read from, under the image's repository path: where the image runs from a copy, by digest, of the hosted registry's — an installation that mirrors `platform/*` into a registry of its own — the signature and the token stay with the source (`registry.tequila.dev`). A signature covers a digest, never a registry. Under `tequila.dev` unless `--allow-any-host` |
 | `--allow-any-host` | `false` | accept URLs outside `tequila.dev` (a dev VM's `*.<slug>.test`) |
 | `--report-own-services` | `true` | the render's switch; `spec.operator.report.ownServices` must allow it too |
 | `--namespace` | `$POD_NAMESPACE`, else `tq-operator` | the operator's own namespace |
