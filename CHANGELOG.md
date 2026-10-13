@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/tequila/tq-operator/compare/v0.3.0...v0.4.0) (2026-10-13)
+
+
+### Features
+
+* **supplychain:** --signature-registry — a copy by digest verifies with its source's signature ([#9](https://github.com/tequila/tq-operator/issues/9)) ([a55ec0b](https://github.com/tequila/tq-operator/commit/a55ec0bfb65b27bf49a489167a97e86670c269f4))
+
 ## [0.3.0](https://github.com/tequila/tq-operator/compare/v0.2.0...v0.3.0) (2026-10-13)
 
 
