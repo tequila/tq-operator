@@ -173,13 +173,24 @@ type testTSA struct {
 	leafKey  *ecdsa.PrivateKey
 }
 
+// newTestTSA's certificates are valid a day either side of validAt — the time its tokens attest,
+// at which the verifier checks the chain — AND of the wall clock: a token carries a second time,
+// the CMS signing-time attribute, which pkcs7 sets to time.Now() and timestamp.ParseResponse
+// refuses outside the signer's validity. A window around validAt alone stopped covering the
+// wall clock a day after validAt.
 func newTestTSA(t *testing.T, validAt time.Time) *testTSA {
 	t.Helper()
 	rootKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	notBefore, notAfter := validAt.Add(-24*time.Hour), validAt.Add(24*time.Hour)
+	from, until := validAt, validAt
+	if now := time.Now(); now.Before(from) {
+		from = now
+	} else if now.After(until) {
+		until = now
+	}
+	notBefore, notAfter := from.Add(-24*time.Hour), until.Add(24*time.Hour)
 	rootTpl := &x509.Certificate{
 		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "test tsa root"},
 		NotBefore: notBefore, NotAfter: notAfter,
